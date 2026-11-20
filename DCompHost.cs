@@ -39,7 +39,7 @@ namespace WindowScatter
 
             Hwnd = CreateWindowExW(
                 WS_EX_NOREDIRECTIONBITMAP | WS_EX_TOOLWINDOW_STYLE | WS_EX_TRANSPARENT_CLICKTHROUGH | WS_EX_NOACTIVATE,
-                ClassName, "WindowScatter DComp Host", WS_POPUP,
+                ClassName, "MissionView DComp Host", WS_POPUP,
                 0, 0, 1, 1, IntPtr.Zero, IntPtr.Zero, hInstance, IntPtr.Zero);
 
             if (Hwnd == IntPtr.Zero)

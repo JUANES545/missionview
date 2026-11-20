@@ -24,6 +24,7 @@ public class LayoutTests
             Assert.InRange(l.Y, 0, h - l.Height + 1e-7);
             double sx = l.Width / (l.Window.OriginalRect.Right - l.Window.OriginalRect.Left);
             double sy = l.Height / (l.Window.OriginalRect.Bottom - l.Window.OriginalRect.Top);
+            Assert.InRange(sx, double.Epsilon, .5);
             Assert.Equal(sx, sy, 8);
             if (scale.HasValue) Assert.Equal(scale.Value, sx, 8);
             scale = sx;
@@ -34,7 +35,7 @@ public class LayoutTests
             var a = layouts[i]; var b = layouts[j];
             double area = Math.Max(0, Math.Min(a.X + a.Width, b.X + b.Width) - Math.Max(a.X, b.X))
                 * Math.Max(0, Math.Min(a.Y + a.Height, b.Y + b.Height) - Math.Max(a.Y, b.Y));
-            Assert.True(area <= .05 * Math.Min(a.Width * a.Height, b.Width * b.Height) + 1e-6,
+            Assert.True(area <= 1e-6,
                 $"Excessive overlap: {area}");
         }
     }
@@ -76,18 +77,62 @@ public class LayoutTests
     }
 
     [Fact]
-    public void SmallOverlapIsAllowedWithoutMovingOriginalCenters()
+    public void NearbyWindowsMoveApartBeforeReducingScale()
     {
         var layouts = Calculate([Win(1, 100, 100, 800, 600), Win(2, 490, 100, 800, 600)]);
         var left = layouts.Single(l => l.Window.Handle == new IntPtr(1));
-        Assert.Equal(500, left.X + left.Width / 2, 6);
         var right = layouts.Single(l => l.Window.Handle == new IntPtr(2));
-        Assert.Equal(890, right.X + right.Width / 2, 6);
+        Assert.True(right.X >= left.X + left.Width + 28);
+        Assert.Equal(730, right.X, 7);
+        Assert.Equal(250, right.Y, 7);
+        Assert.Equal(400, right.Width);
         VerifyGeometry(layouts, 1920, 1080);
     }
 
     [Fact]
     public void EmptyInputReturnsEmpty() => Assert.Empty(Calculate([]));
+
+    [Fact]
+    public void GridFallbackReservesChromeForMixedSizes()
+    {
+        var windows = Enumerable.Range(1, 12).Select(i => Win(i, i * 10, i * 20,
+            i % 2 == 0 ? 1920 : 120, i % 3 == 0 ? 1080 : 200)).ToList();
+        var layouts = WindowLayoutCalculator.PlaceGrid(windows, .08, 4, 30, 79, 900, 400);
+        VerifyGeometry(layouts, 960, 520);
+        VerifyChrome(layouts, 960, 520, 1);
+    }
+
+    [Theory]
+    [InlineData(5120, 1440, 1, 25)]
+    [InlineData(1920, 1080, 1.5, 40)]
+    [InlineData(1080, 1920, 2, 30)]
+    [InlineData(320, 240, 1, 20)]
+    [InlineData(5120, 1440, 2, 80)]
+    public void CompleteChromeEnvelopesFitWithoutIntersections(double w, double h, double dpi, int count)
+    {
+        var windows = Enumerable.Range(1, count).Select(i => Win(i, 0, 0,
+            i % 3 == 0 ? 120 : 1600, i % 2 == 0 ? 1100 : 240)).ToList();
+        var layouts = new WindowLayoutCalculator().CalculateLayouts(windows, w, h, dpi);
+        VerifyGeometry(layouts, w, h);
+        VerifyChrome(layouts, w, h, dpi);
+    }
+
+    private static void VerifyChrome(List<WindowLayout> layouts, double w, double h, double dpi)
+    {
+        for (int i = 0; i < layouts.Count; i++)
+        {
+            var a = layouts[i];
+            Assert.True(a.X - 14 * dpi >= -1e-6);
+            Assert.True(a.Y - 14 * dpi >= 64 * dpi - 1e-6);
+            Assert.True(a.X + a.Width + 14 * dpi <= w + 1e-6);
+            Assert.True(a.Y + a.Height + 36 * dpi <= h + 1e-6);
+            foreach (var b in layouts.Skip(i + 1))
+                Assert.True(a.X + a.Width + 28 * dpi <= b.X + 1e-6 ||
+                    b.X + b.Width + 28 * dpi <= a.X + 1e-6 ||
+                    a.Y + a.Height + 50 * dpi <= b.Y + 1e-6 ||
+                    b.Y + b.Height + 50 * dpi <= a.Y + 1e-6);
+        }
+    }
 
     [Fact]
     public void MovingAndResizingSameHandleUpdatesNextLayout()
@@ -134,6 +179,7 @@ public class LayoutTests
             Assert.Equal(windows.Count, layouts.Count);
             Assert.Equal(windows.Count, layouts.Select(l => l.Window.Handle).Distinct().Count());
             VerifyGeometry(layouts, w, h);
+            VerifyChrome(layouts, w, h, 1);
         }
     }
 

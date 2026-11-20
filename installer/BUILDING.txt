@@ -1,0 +1,144 @@
+MissionView delivery
+====================
+
+Status
+------
+These scripts prepare local packages; they do not establish product acceptance.
+The coordinator approved initial native and installer acceptance for the first
+release and recorded publicReleaseApproved=true with no blockers in
+release-readiness.json. The approved core targets .NET 10 LTS and stores settings
+per user, with legacy migration. Publication still requires the final committed
+source SHA and passing CI. Approval does not certify unexercised configurations.
+
+GitFlow and version
+-------------------
+Use feature/* -> develop -> main. Delivery validates pull requests and pushes to
+develop/main. Only a successful main push can enter the release job. The workflow
+does not merge branches or approve pull requests.
+
+Release tags are the version source: v0.1.0 initially, then a numeric patch
+increment per released main SHA (v0.1.1, v0.1.2, ...). Commit wording does not
+control the version. An existing tag for a SHA wins on reruns. The planner rejects
+malformed numeric release tags, multiple versions for one SHA, Windows version
+overflow, and main releases that do not descend from the latest release tag.
+Only annotated tags with subject "MissionView release vX.Y.Z" belong to this
+product sequence. Upstream tags do not seed its version. A name collision with
+an unrelated tag blocks publication; the workflow never moves an inherited tag.
+Keep nextVersion null for automatic patch increments. To prepare a minor/major
+release, review a change such as nextVersion: "0.2.0" or "1.0.0" in
+release-readiness.json through develop. Clear it to null in the next development
+change; reusing an old override on a new SHA fails instead of repeating a version.
+Never move/delete release tags or change this sequence outside a reviewed policy
+change. Branch/tag protections and required checks need separate authorized
+repository configuration; workflow files alone cannot enforce merge permissions.
+
+MSBuild receives Version, AssemblyVersion, FileVersion and InformationalVersion
+from that plan. The EXE and installer use X.Y.Z.0; ZIP, manifest, tag and release
+use X.Y.Z. No project/framework file changes are needed for version injection.
+
+Local developer commands (PowerShell, repository root)
+------------------------------------------------------
+Prerequisites: Windows x64, .NET SDK 10.0.404, Node.js 22, and Inno Setup 6.3+
+for compiling Setup.exe. Both test suites now target .NET 10; CI no longer
+provisions SDK 8. The app package includes the .NET runtime; end users
+do not need a developer SDK. Provision developer/build tools through an approved
+process. These scripts do not download or install Inno Setup.
+
+  node --test .\scripts\release\*.test.cjs
+  dotnet test .\tests\WindowScatter.LayoutTests -c Release
+  dotnet test .\tests\WindowScatter.WpfTests -c Release
+  node .\scripts\release\release.cjs
+
+Use the version printed by the planner. Use fresh output directories:
+
+  $sha = git rev-parse HEAD
+  .\scripts\release\Publish-App.ps1 -Version 0.1.0 -SourceSha $sha `
+    -OutputDirectory "$PWD\artifacts\app-0.1.0"
+  .\scripts\release\Build-Package.ps1 `
+    -PublishDirectory "$PWD\artifacts\app-0.1.0" `
+    -OutputDirectory "$PWD\artifacts\release-0.1.0"
+
+Build-Package finds ISCC.exe on PATH or in Program Files (x86)\Inno Setup 6.
+Use -CompilerPath for another approved installation. Missing ISCC is a hard
+failure, not a ZIP-only release. Neither command starts the application, installs
+the package, adds login tasks/services, or tests native window interactions.
+Local uncommitted builds use HEAD only as a base reference, not exact source
+identity. Public builds run from the checked-out workflow SHA.
+
+Artifacts and installation
+--------------------------
+Each release contains exactly:
+  MissionView-X.Y.Z-Setup.exe
+  MissionView-X.Y.Z-win-x64.zip
+  release-manifest.json
+  SHA256SUMS.txt
+
+The self-contained output includes LICENSE and generated third-party notices
+from restored dependency/runtime manifests and their license/notice files.
+The installer shares the same files as the ZIP. Both exclude settings, diagnostic
+JSON and PDBs. The final assembly contract uses MissionView.exe, MissionView.dll,
+MissionView.deps.json and MissionView.runtimeconfig.json. The project file and
+source namespace retain WindowScatter; packaging rejects obsolete application
+binaries rather than mixing the two identities.
+
+The installer currently enforces x64 Windows 11 24H2 (10.0.26100) or later as a
+conservative packaging policy pending support validation. The Windows targeting
+pack alone does not establish the application's technical minimum OS version.
+No Windows edition check is imposed. Compatibility on older builds or ARM64 has
+not been established; physical hardware acceptance is separate.
+The installer runs per-user without elevation, offers a folder selector, and
+defaults to LocalAppData\Programs\MissionView. Users must select a writable path.
+The comma-separated CloseApplicationsFilter covers WindowScatter.exe and
+MissionView.exe. Inno checks only Files/InstallDelete entries, so InstallDelete
+names the four obsolete WindowScatter application binaries explicitly. It does
+not delete settings, other files or directories. Setup does not restart the app.
+It preserves the AppId/install directory on upgrades and never bundles or deletes
+settings. The app uses LocalAppData\MissionView\settings.json regardless of its
+installation folder. When that file is absent, it migrates settings.json beside
+the executable without deleting the legacy file. Existing per-user settings win.
+Invalid/read/migration failures stop startup with an error instead of silently
+loading defaults. Writes use a same-directory temporary file and atomic replace
+or move. Isolated migration tests do not replace installer upgrade acceptance.
+
+No signing certificate is configured. Do not describe these binaries as signed,
+trusted by SmartScreen, or ready for public release. Apply any future signing
+step BEFORE checksums and verify signatures; never fabricate certificate status.
+
+Publishing and recovery
+-----------------------
+Workflow concurrency serializes main delivery and does not cancel in-flight
+publication. The job checks that its SHA is still main before starting and again
+immediately after transfer verification, before publishing the draft. If main
+advanced during transfers, the release stays draft for review.
+It creates a tag only after checks, packaging and local asset
+verification. It uploads a draft, downloads/checks the four assets, then publishes.
+An interrupted draft reuses its SHA/version and replaces only its known draft
+assets. A completed release rerun verifies downloads and makes no asset changes.
+An unfinished previous release blocks the next version, preventing sequence
+gaps. Before advancing, the job verifies all four predecessor assets, checksums
+and manifest against the version and source commit resolved from its tag.
+If main advanced while a draft failed, coordinator review is required;
+the workflow will not retarget that draft or silently skip its version.
+An incomplete/corrupt completed release fails for human review, never overwrites.
+API/authentication errors other than a specific missing-release 404 remain errors.
+Only the release job receives contents:write; PR jobs use read-only permissions.
+No authenticated GitHub operation runs during local validation.
+
+Before enabling delivery
+------------------------
+The integrated app targets net10.0-windows10.0.26100.0 and WPF tests target
+net10.0-windows; dependency versions remain unchanged.
+Revalidate both suites and a fresh self-contained publish after integration.
+Record coordinator-reviewed initial native and installer acceptance applicable to the first release,
+including the per-user settings preservation actually exercised. Do not infer
+untested clean-profile or N-to-N+1 results from a same-version installation.
+Keep the evidence and its limits in the internal acceptance record.
+Confirm the CI image has an approved Inno Setup 6.3+ compiler; the build fails
+explicitly if it is absent. Publishing also requires separately authorized
+workflow deployment with the correct GitHub identity and token scopes.
+The first-release gate requires coordinator approval of the final identity,
+passing automated checks and package verification, plus the initial native and
+installer acceptance approved by the coordinator and recorded in
+release-readiness.json. A repaired same-version installation is not an N-to-N+1
+upgrade test. Broader custom-folder/uninstall, Windows-build and hardware matrices
+remain transparent unverified limits, not an invented platform certification.
