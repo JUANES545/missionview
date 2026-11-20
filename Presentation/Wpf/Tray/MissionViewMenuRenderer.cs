@@ -1,23 +1,76 @@
+using System.Drawing;
+using System.Windows.Forms;
+
 namespace WindowScatter;
 
-internal sealed class MissionViewMenuRenderer : System.Windows.Forms.ToolStripProfessionalRenderer
+internal sealed class MissionViewMenuRenderer : ToolStripProfessionalRenderer
 {
     internal MissionViewMenuRenderer() : base(new Colors()) => RoundedEdges = false;
 
-    private sealed class Colors : System.Windows.Forms.ProfessionalColorTable
+    internal static (Color Background, Color Foreground) Palette(bool selected, bool pressed, bool isChecked,
+        bool enabled, bool highContrast, bool informational = false)
     {
-        private static System.Drawing.Color Ground => System.Drawing.Color.FromArgb(32, 37, 34);
-        private static System.Drawing.Color Selected => System.Drawing.Color.FromArgb(53, 67, 57);
-        public override System.Drawing.Color ToolStripDropDownBackground => Ground;
-        public override System.Drawing.Color MenuBorder => Ground;
-        public override System.Drawing.Color MenuItemSelected => Selected;
-        public override System.Drawing.Color MenuItemBorder => Selected;
-        public override System.Drawing.Color CheckBackground => Selected;
-        public override System.Drawing.Color CheckSelectedBackground => Selected;
-        public override System.Drawing.Color SeparatorDark => System.Drawing.Color.FromArgb(60, 69, 63);
-        public override System.Drawing.Color SeparatorLight => Ground;
-        public override System.Drawing.Color ImageMarginGradientBegin => Ground;
-        public override System.Drawing.Color ImageMarginGradientMiddle => Ground;
-        public override System.Drawing.Color ImageMarginGradientEnd => Ground;
+        bool active = enabled && (selected || pressed);
+        if (highContrast)
+            return (active ? SystemColors.Highlight : SystemColors.Menu,
+                active ? SystemColors.HighlightText : enabled || informational ? SystemColors.MenuText : SystemColors.GrayText);
+        return (active ? Color.FromArgb(53, 67, 57) : isChecked ? Color.FromArgb(43, 54, 46) : Color.FromArgb(32, 37, 34),
+            enabled ? Color.FromArgb(243, 245, 244) : Color.FromArgb(188, 197, 190));
+    }
+
+    protected override void OnRenderToolStripBackground(ToolStripRenderEventArgs e)
+    {
+        using var brush = new SolidBrush(Palette(false, false, false, true, SystemInformation.HighContrast).Background);
+        e.Graphics.FillRectangle(brush, e.AffectedBounds);
+    }
+
+    protected override void OnRenderMenuItemBackground(ToolStripItemRenderEventArgs e)
+    {
+        var colors = ItemColors(e.Item);
+        using var brush = new SolidBrush(colors.Background);
+        e.Graphics.FillRectangle(brush, new Rectangle(Point.Empty, e.Item.Size));
+    }
+
+    protected override void OnRenderItemText(ToolStripItemTextRenderEventArgs e)
+    {
+        e.TextColor = ItemColors(e.Item).Foreground;
+        e.TextFormat &= ~TextFormatFlags.HidePrefix;
+        TextRenderer.DrawText(e.Graphics, e.Text, e.TextFont, e.TextRectangle, e.TextColor, e.TextFormat);
+    }
+
+    protected override void OnRenderItemCheck(ToolStripItemImageRenderEventArgs e)
+    {
+        var colors = ItemColors(e.Item);
+        using var pen = new Pen(colors.Foreground, 2);
+        var r = e.ImageRectangle;
+        e.Graphics.DrawLines(pen, [new Point(r.Left + 2, r.Top + r.Height / 2),
+            new Point(r.Left + r.Width / 2 - 1, r.Bottom - 3), new Point(r.Right - 2, r.Top + 2)]);
+    }
+
+    private static (Color Background, Color Foreground) ItemColors(ToolStripItem item)
+        => Palette(item.Selected, item.Pressed, item is ToolStripMenuItem { Checked: true }, item.Enabled,
+            SystemInformation.HighContrast, item.Tag is "Version");
+
+    private sealed class Colors : ProfessionalColorTable
+    {
+        private static Color Ground => SystemInformation.HighContrast ? SystemColors.Menu : Color.FromArgb(32, 37, 34);
+        private static Color Selected => SystemInformation.HighContrast ? SystemColors.Highlight : Color.FromArgb(53, 67, 57);
+        public override Color ToolStripDropDownBackground => Ground;
+        public override Color MenuBorder => Ground;
+        public override Color MenuItemSelected => Selected;
+        public override Color MenuItemSelectedGradientBegin => Selected;
+        public override Color MenuItemSelectedGradientEnd => Selected;
+        public override Color MenuItemPressedGradientBegin => Selected;
+        public override Color MenuItemPressedGradientMiddle => Selected;
+        public override Color MenuItemPressedGradientEnd => Selected;
+        public override Color MenuItemBorder => Selected;
+        public override Color CheckBackground => Selected;
+        public override Color CheckSelectedBackground => Selected;
+        public override Color CheckPressedBackground => Selected;
+        public override Color SeparatorDark => SystemInformation.HighContrast ? SystemColors.MenuText : Color.FromArgb(105, 121, 110);
+        public override Color SeparatorLight => Ground;
+        public override Color ImageMarginGradientBegin => Ground;
+        public override Color ImageMarginGradientMiddle => Ground;
+        public override Color ImageMarginGradientEnd => Ground;
     }
 }

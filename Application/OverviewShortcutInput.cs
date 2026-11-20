@@ -11,6 +11,7 @@ namespace WindowScatter
         private readonly Func<WindowActivationTarget> captureForeground;
         private readonly Func<WindowActivationTarget> capturePointerWindow;
         private bool wasRecording;
+        private readonly HashSet<int> pressedKeys = new(), suppressedKeys = new();
 
         public OverviewShortcutInput(ScatterInteraction interaction, Func<WindowActivationTarget> captureForeground,
             Func<WindowActivationTarget> capturePointerWindow)
@@ -33,6 +34,8 @@ namespace WindowScatter
                 if (!wasRecording) recordingModifiers.Clear();
                 wasRecording = true;
                 recordingModifiers.Update(key, down);
+                if (down) pressedKeys.Add(key);
+                else { pressedKeys.Remove(key); suppressedKeys.Remove(key); }
                 Reset();
                 return new(false, false, false, recordingModifiers.Modifiers, default);
             }
@@ -43,11 +46,16 @@ namespace WindowScatter
                 Reset();
             }
             modifiers.Update(key, down);
-            if (bindings?.Normal is not { } normalBinding || key != normalBinding.Key) return default;
-            if (!down) { interaction.ActivationKeyUp(); return default; }
-            bool normal = bindings.MatchesNormal(key, modifiers.Modifiers);
-            bool app = bindings.MatchesAppExpose(key, modifiers.Modifiers);
-            bool activate = interaction.ActivationKeyDown(normal || app);
+            if (!down)
+            {
+                pressedKeys.Remove(key);
+                return new(suppressedKeys.Remove(key), false, false, modifiers.Modifiers, default);
+            }
+            bool firstDown = pressedKeys.Add(key);
+            bool normal = bindings?.MatchesNormal(key, modifiers.Modifiers) == true;
+            bool app = bindings?.MatchesAppExpose(key, modifiers.Modifiers) == true;
+            if (firstDown && (normal || app)) suppressedKeys.Add(key);
+            bool activate = firstDown && (normal || app);
             // Capture in the hook, before its caller can schedule or activate an overlay.
             bool opening = activate && !interaction.IsOpen;
             var foreground = opening ? captureForeground() : default;
@@ -66,7 +74,7 @@ namespace WindowScatter
                     captureError = ex.Message;
                 }
             }
-            return new(normal || app, activate, app, modifiers.Modifiers, foreground, applicationWindow, captureError);
+            return new(suppressedKeys.Contains(key), activate, app, modifiers.Modifiers, foreground, applicationWindow, captureError);
         }
     }
 }

@@ -7,7 +7,6 @@ public partial class MainWindow
 {
     private SettingsWindow? settingsWindow;
     private System.Windows.Forms.ToolStripMenuItem? overviewTrayItem;
-    private System.Windows.Forms.ToolStripMenuItem? startupTrayItem;
     internal bool IsRecordingShortcut => settingsWindow?.IsRecordingShortcut == true;
     partial void QueryShortcutRecording(ref bool recording) => recording = IsRecordingShortcut;
     partial void RecordOverviewShortcutKey(int virtualKey, int modifiers, bool isKeyDown)
@@ -46,7 +45,7 @@ public partial class MainWindow
     private bool ApplyPreferences(AppSettings candidate)
     {
         var previous = settings.Copy();
-        bool hotkeyChanged = candidate.Hotkey != previous.Hotkey;
+        bool hotkeyChanged = candidate.Hotkey != previous.Hotkey || candidate.AppExposeHotkey != previous.AppExposeHotkey;
         bool startupChanged = candidate.RunOnStartup != settings.RunOnStartup;
         bool cornersChanged = candidate.EnableHotCorners != previous.EnableHotCorners
             || candidate.HotCornerPosition != previous.HotCornerPosition || candidate.HotCornerDelay != previous.HotCornerDelay;
@@ -87,7 +86,7 @@ public partial class MainWindow
 
     private void ApplyConfiguredHotkey(AppSettings candidate)
     {
-        if (!TryApplyOverviewHotkey(candidate.Hotkey, out string error))
+        if (!TryApplyOverviewHotkeys(candidate.Hotkey, candidate.AppExposeHotkey, out string error))
             throw new InvalidOperationException(error);
         if (!string.IsNullOrEmpty(error))
         {
@@ -105,7 +104,6 @@ public partial class MainWindow
     private void RefreshTrayPreferences()
     {
         if (overviewTrayItem != null) overviewTrayItem.ShortcutKeyDisplayString = settings.Hotkey;
-        if (startupTrayItem != null) startupTrayItem.Checked = settings.RunOnStartup;
         settingsWindow?.RefreshStartupPreference();
     }
 

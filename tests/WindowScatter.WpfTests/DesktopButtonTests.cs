@@ -73,6 +73,8 @@ public class DesktopButtonTests
         {
             var host = LoadWindow();
             var content = (Canvas)host.FindName("ChromeCanvas");
+            var thumbnails = Assert.IsType<OverviewThumbnailCanvas>(host.FindName("ScatterCanvas"));
+            Assert.NotNull(UIElementAutomationPeer.CreatePeerForElement(thumbnails).GetPattern(PatternInterface.Selection));
             var button = (Button)host.FindName("DesktopButton");
             ((Canvas)host.Content).Children.Remove(content);
             var chrome = new OverviewChromeWindow(host, content)

@@ -1,34 +1,5 @@
 namespace WindowScatter
 {
-    internal readonly record struct OverviewHotkey(int Modifiers, int Key)
-    {
-        public const int Shift = 4;
-        public uint NativeModifiers => (uint)((Modifiers & 12) | ((Modifiers & 1) << 1) | ((Modifiers & 2) >> 1));
-        public OverviewHotkey WithShift => this with { Modifiers = Modifiers | Shift };
-
-        public static OverviewHotkey Parse(string text)
-        {
-            if (string.IsNullOrWhiteSpace(text)) throw new ArgumentException("Choose a supported shortcut.");
-            var parts = text.Split('+');
-            if (parts.Length == 0 || parts.Any(p => string.IsNullOrWhiteSpace(p)))
-                throw new ArgumentException("Choose a supported shortcut.");
-            int keys = 0;
-            foreach (string part in parts)
-            {
-                string token = part.Trim().ToLowerInvariant();
-                if (token is not ("ctrl" or "control" or "alt" or "shift" or "win" or "windows"))
-                {
-                    if (HotkeyParser.Parse(token).VirtualKeyCode == 0)
-                        throw new ArgumentException("Choose a supported shortcut.");
-                    keys++;
-                }
-            }
-            var parsed = HotkeyParser.Parse(text);
-            if (keys != 1) throw new ArgumentException("The shortcut must contain exactly one non-modifier key.");
-            return new(parsed.ModifierKeys, parsed.VirtualKeyCode);
-        }
-    }
-
     // Reserve both combinations before publishing a new dispatch configuration.
     internal sealed class OverviewHotkeys
     {
@@ -47,17 +18,23 @@ namespace WindowScatter
         public OverviewHotkeys(Func<int, OverviewHotkey, bool> register, Func<int, bool> unregister)
         { this.register = register; this.unregister = unregister; }
 
-        public bool TryInitialize(string text, out string error)
+        public bool TryInitialize(string text, out string error) => TryInitialize(text, null, out error);
+
+        public bool TryInitialize(string text, string? appExposeText, out string error)
         {
-            if (TryApply(text, preserveExistingShiftShortcut: true, out error)) return true;
+            if (TryApply(text, appExposeText, preserveExistingShiftShortcut: true, out error)) return true;
             if (IsFaulted || Normal != null) return false;
-            OverviewHotkey normal;
-            try { normal = OverviewHotkey.Parse(text); }
-            catch (ArgumentException) { return false; }
-            inheritedNormalUsesHookOnly = !register(NormalId, normal);
-            if (!inheritedNormalUsesHookOnly) registered[NormalId] = normal;
-            inheritedNormalOnlyShortcut = normal;
-            if ((normal.Modifiers & OverviewHotkey.Shift) != 0) inheritedShiftShortcut = normal;
+            if (!OverviewShortcutPair.TryParse(text, appExposeText, out var pair, out _)) return false;
+            var normal = pair.Normal;
+            bool hookOnly = !register(NormalId, normal);
+            // Only the unchanged legacy pair may retain the historical hook-only exception.
+            if (appExposeText == null)
+            {
+                inheritedNormalUsesHookOnly = hookOnly;
+                inheritedNormalOnlyShortcut = normal;
+                if ((normal.Modifiers & OverviewHotkey.Shift) != 0) inheritedShiftShortcut = normal;
+            }
+            if (!hookOnly) registered[NormalId] = normal;
             Normal = normal;
             error = NormalOnlyWarning;
             return true;
@@ -66,22 +43,23 @@ namespace WindowScatter
         public bool MatchesNormal(int key, int modifiers) => Normal is { } normal && normal.Key == key && normal.Modifiers == modifiers;
         public bool MatchesAppExpose(int key, int modifiers) => AppExpose is { } app && app.Key == key && app.Modifiers == modifiers;
 
-        public bool TryApply(string text, bool preserveExistingShiftShortcut, out string error)
+        public bool TryApply(string text, bool preserveExistingShiftShortcut, out string error) =>
+            TryApply(text, null, preserveExistingShiftShortcut, out error);
+
+        public bool TryApply(string text, string? appExposeText, bool preserveExistingShiftShortcut, out string error)
         {
-            error = "";
-            OverviewHotkey normal;
-            try { normal = OverviewHotkey.Parse(text); }
-            catch (ArgumentException ex) { error = ex.Message; return false; }
-            bool shiftConflict = (normal.Modifiers & OverviewHotkey.Shift) != 0;
+            if (!OverviewShortcutPair.TryParse(text, appExposeText, out var pair, out error)) return false;
+            var normal = pair.Normal;
+            bool shiftConflict = pair.AppExpose == null;
             if (shiftConflict && !preserveExistingShiftShortcut && inheritedShiftShortcut != normal)
             {
                 error = "This shortcut already includes Shift. Choose one without Shift to enable both overview shortcuts. The previous shortcut is unchanged.";
                 return false;
             }
-            bool inheritedNormalOnly = inheritedNormalOnlyShortcut == normal;
+            bool inheritedNormalOnly = appExposeText == null && inheritedNormalOnlyShortcut == normal;
             var desired = new Dictionary<int, OverviewHotkey>();
             if (!inheritedNormalOnly || !inheritedNormalUsesHookOnly) desired.Add(NormalId, normal);
-            if (!shiftConflict && !inheritedNormalOnly) desired.Add(AppExposeId, normal.WithShift);
+            if (pair.AppExpose is { } app && !inheritedNormalOnly) desired.Add(AppExposeId, app);
             var previous = new Dictionary<int, OverviewHotkey>(registered);
             var removed = new List<KeyValuePair<int, OverviewHotkey>>();
             var added = new List<int>();
@@ -100,7 +78,7 @@ namespace WindowScatter
                 added.Add(item.Key);
             }
             Normal = normal;
-            AppExpose = shiftConflict || inheritedNormalOnly ? null : normal.WithShift;
+            AppExpose = inheritedNormalOnly ? null : pair.AppExpose;
             IsFaulted = false;
             if (shiftConflict)
             {

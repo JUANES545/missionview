@@ -69,7 +69,7 @@ namespace WindowScatter
                 double targetX = layout.X / dpiScale;
                 double targetY = layout.Y / dpiScale;
 
-                var clickBorder = new Border
+                var clickBorder = new OverviewThumbnail(win.Title)
                 {
                     Background = System.Windows.Media.Brushes.Transparent,
                     Width = targetW,
@@ -234,6 +234,13 @@ namespace WindowScatter
                 if (thumb.TitleLabel != null)
                     thumb.TitleLabel.FontSize = isSelected ? 14 : 13;
             }
+        }
+
+        public void SetAutomationSelection(IntPtr windowHandle)
+        {
+            foreach (var thumb in windowThumbs)
+                if (thumb.ClickBorder is OverviewThumbnail target)
+                    target.SetSelected(thumb.WindowHandle == windowHandle);
         }
 
         public void BeginTransition(Action startTransition)

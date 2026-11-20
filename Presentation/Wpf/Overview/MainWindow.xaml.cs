@@ -310,7 +310,7 @@ namespace WindowScatter
                         RecordOverviewShortcutKey(key, input.Modifiers, down);
                     if (input.Suppress)
                     {
-                        if ((input.Modifiers & 0x0A) != 0)
+                        if (down && (input.Modifiers & 0x0A) != 0)
                             KeyboardMenuMask.TrySend(SendInput);
                         if (input.Activate)
                             this.Dispatcher.BeginInvoke(new Action(async () =>
@@ -666,7 +666,7 @@ namespace WindowScatter
 
         /// <summary>
         /// Keeps the app recallable while hidden: tray icon re-triggers scatter on
-        /// double-click and exposes preferences and app actions.
+        /// left double-click and exposes preferences and app actions.
         /// </summary>
         private void SetupTrayIcon()
         {
@@ -686,7 +686,7 @@ namespace WindowScatter
                 var menu = new System.Windows.Forms.ContextMenuStrip();
                 var version = (typeof(MainWindow).Assembly.GetName().Version
                     ?? throw new InvalidOperationException("The MissionView application version is missing.")).ToString(3);
-                menu.Items.Add(new System.Windows.Forms.ToolStripMenuItem($"MissionView v{version}") { Enabled = false });
+                menu.Items.Add(new System.Windows.Forms.ToolStripMenuItem($"MissionView v{version}") { Enabled = false, Tag = "Version" });
                 menu.Items.Add(new System.Windows.Forms.ToolStripSeparator());
 
                 var triggerItem = new System.Windows.Forms.ToolStripMenuItem(
@@ -702,20 +702,6 @@ namespace WindowScatter
 
                 overviewTrayItem = triggerItem;
                 triggerItem.ShortcutKeyDisplayString = settings.Hotkey;
-                var startupItem = new System.Windows.Forms.ToolStripMenuItem("Start with Windows")
-                {
-                    Checked = settings.RunOnStartup,
-                    CheckOnClick = true
-                };
-                startupItem.Click += (s, e) =>
-                {
-                    var candidate = settings.Copy();
-                    candidate.RunOnStartup = startupItem.Checked;
-                    ApplyPreferences(candidate);
-                    startupItem.Checked = settings.RunOnStartup;
-                };
-                startupTrayItem = startupItem;
-
                 var exitItem = new System.Windows.Forms.ToolStripMenuItem(
                     "Quit", null, (s, e) => { Close(); });
 
@@ -731,31 +717,24 @@ namespace WindowScatter
                 menu.Items.Add(new System.Windows.Forms.ToolStripMenuItem("Settings...", null, (_, _) => OpenSettings()));
                 updatesTrayItem = new System.Windows.Forms.ToolStripMenuItem("Check for updates...", null, async (_, _) => await RunUpdateAction());
                 menu.Items.Add(updatesTrayItem);
-                menu.Items.Add(startupItem);
-                menu.Items.Add(new System.Windows.Forms.ToolStripMenuItem("About MissionView", null, (_, _) =>
-                    MessageBox.Show($"MissionView\nVersion {version}\n\nA window overview for Windows.",
-                        "About MissionView", MessageBoxButton.OK, MessageBoxImage.Information)));
                 menu.Items.Add(new System.Windows.Forms.ToolStripSeparator());
                 menu.Items.Add(exitItem);
-                if (!System.Windows.Forms.SystemInformation.HighContrast)
-                {
-                    menu.Renderer = new MissionViewMenuRenderer();
-                    menu.BackColor = System.Drawing.Color.FromArgb(32, 37, 34);
-                    menu.ForeColor = System.Drawing.Color.FromArgb(243, 245, 244);
-                }
+                menu.Renderer = new MissionViewMenuRenderer();
+                menu.BackColor = System.Drawing.Color.FromArgb(32, 37, 34);
+                menu.ForeColor = System.Drawing.Color.FromArgb(243, 245, 244);
                 menu.ShowImageMargin = false;
                 menu.Padding = new System.Windows.Forms.Padding(4);
                 foreach (System.Windows.Forms.ToolStripItem item in menu.Items)
                     item.Padding = new System.Windows.Forms.Padding(8, 5, 8, 5);
                 trayIcon.ContextMenuStrip = menu;
 
-                trayIcon.DoubleClick += async (s, e) =>
+                BindTrayOverview(trayIcon, async () =>
                 {
                     await Dispatcher.InvokeAsync(async () =>
                     {
                         await ToggleScatterAsync();
                     });
-                };
+                });
             }
             catch (Exception ex)
             {

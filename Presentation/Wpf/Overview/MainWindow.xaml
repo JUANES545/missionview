@@ -33,7 +33,7 @@
         <Canvas x:Name="ChromeCanvas"
                 Width="{Binding RelativeSource={RelativeSource AncestorType=Window}, Path=ActualWidth}"
                 Height="{Binding RelativeSource={RelativeSource AncestorType=Window}, Path=ActualHeight}">
-            <Canvas x:Name="ScatterCanvas"
+            <local:OverviewThumbnailCanvas x:Name="ScatterCanvas"
                     Background="Transparent"
                     MouseLeftButtonDown="ScatterCanvas_MouseLeftButtonDown"
                     Width="{Binding RelativeSource={RelativeSource AncestorType=Window}, Path=ActualWidth}"
