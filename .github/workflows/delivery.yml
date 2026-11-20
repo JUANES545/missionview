@@ -1,0 +1,100 @@
+name: Delivery
+
+on:
+  pull_request:
+    branches: [develop, main]
+  push:
+    branches: [develop, main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: missionview-delivery-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: Validate
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.404'
+      - name: Check release logic
+        shell: pwsh
+        run: node --test .\scripts\release\*.test.cjs
+      - name: Check GitFlow and plan version
+        id: plan
+        shell: pwsh
+        run: node .\scripts\release\release.cjs
+      - name: Portable tests
+        shell: pwsh
+        run: dotnet test .\tests\WindowScatter.LayoutTests -c Release --nologo
+      - name: Isolated WPF tests
+        shell: pwsh
+        run: dotnet test .\tests\WindowScatter.WpfTests -c Release --nologo
+      - name: Publish self-contained validation build
+        shell: pwsh
+        env:
+          APP_VERSION: ${{ steps.plan.outputs.version }}
+        run: |
+          .\scripts\release\Publish-App.ps1 -Version $env:APP_VERSION -SourceSha $env:GITHUB_SHA `
+            -OutputDirectory "$env:RUNNER_TEMP\missionview-validation"
+
+  release:
+    name: Release main
+    needs: validate
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: windows-2025
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.404'
+      - name: Check readiness and idempotence
+        id: plan
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await require('./scripts/release/publish-release.cjs').prepare({ github, context, core });
+      - name: Publish versioned app
+        if: steps.plan.outputs.publish == 'true'
+        shell: pwsh
+        env:
+          APP_VERSION: ${{ steps.plan.outputs.version }}
+        run: |
+          .\scripts\release\Publish-App.ps1 -Version $env:APP_VERSION -SourceSha $env:GITHUB_SHA `
+            -OutputDirectory "$env:RUNNER_TEMP\missionview-publish"
+      - name: Compile installer and ZIP
+        if: steps.plan.outputs.publish == 'true'
+        shell: pwsh
+        run: |
+          .\scripts\release\Build-Package.ps1 -PublishDirectory "$env:RUNNER_TEMP\missionview-publish" `
+            -OutputDirectory "$env:RUNNER_TEMP\missionview-assets"
+      - name: Verify and publish release
+        if: steps.plan.outputs.publish == 'true'
+        uses: actions/github-script@v7
+        env:
+          RELEASE_PLAN: ${{ steps.plan.outputs.plan }}
+        with:
+          script: |
+            const path = require('node:path');
+            await require('./scripts/release/publish-release.cjs').publish(
+              { github, context, core }, JSON.parse(process.env.RELEASE_PLAN),
+              path.join(process.env.RUNNER_TEMP, 'missionview-assets'));

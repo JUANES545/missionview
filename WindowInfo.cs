@@ -11,6 +11,7 @@ namespace WindowScatter
         public string Title = string.Empty;
         public RECT OriginalRect;
         public bool WasMaximized;
+        public WindowActivationTarget Identity;
     }
 
     public class WindowThumb
@@ -18,6 +19,8 @@ namespace WindowScatter
         public IntPtr WindowHandle { get; set; }
         public IntPtr ThumbnailHandle { get; set; }
         public bool WasMinimized { get; set; }
+        internal bool WasMaximized { get; set; }
+        internal WindowActivationTarget Identity { get; set; }
         public Border ClickBorder { get; set; } = null!;
         public Border HighlightBorder { get; set; } = null!;
         public TextBlock TitleLabel { get; set; } = null!;

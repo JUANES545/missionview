@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" role="img" aria-labelledby="title desc">
+  <title id="title">Spread</title>
+  <desc id="desc">MissionView logo proposal: three window frames spreading diagonally. Not an approved app icon.</desc>
+  <g fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round">
+    <path d="M7 10H2V22H14V19"/>
+    <path d="M11 6H6V18H18V15"/>
+    <rect x="10" y="2" width="12" height="12" rx="1"/>
+  </g>
+</svg>

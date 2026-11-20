@@ -14,5 +14,23 @@
     <Compile Include="../../WindowInfo.cs" Link="WindowInfo.cs" />
     <Compile Include="../../Win32Interop.cs" Link="Win32Interop.cs" />
     <Compile Include="../../ScatterInteraction.cs" Link="ScatterInteraction.cs" />
+    <Compile Include="../../KeyboardModifierState.cs" Link="KeyboardModifierState.cs" />
+    <Compile Include="../../KeyboardMenuMask.cs" Link="KeyboardMenuMask.cs" />
+    <Compile Include="../../DesktopThumbnail.cs" Link="DesktopThumbnail.cs" />
+    <Compile Include="../../WindowActivation.cs" Link="WindowActivation.cs" />
+    <Compile Include="../../OverviewPreview.cs" Link="OverviewPreview.cs" />
+    <Compile Include="../../OverviewNavigation.cs" Link="OverviewNavigation.cs" />
+    <Compile Include="../../AppSettings.cs" Link="AppSettings.cs" />
+    <Compile Include="../../HotkeyParser.cs" Link="HotkeyParser.cs" />
+    <Compile Include="../../DesktopToggle.cs" Link="DesktopToggle.cs" />
+    <Compile Include="../../WindowEnumerationDiagnostics.cs" Link="WindowEnumerationDiagnostics.cs" />
+    <Compile Include="../../WindowSurfacePolicy.cs" Link="WindowSurfacePolicy.cs" />
+    <Compile Include="../../MonitorHelper.cs" Link="MonitorHelper.cs" />
+    <Compile Include="../../WindowEnumerator.cs" Link="WindowEnumerator.cs" />
+    <Compile Include="../../WindowTransfer.cs" Link="WindowTransfer.cs" />
+    <Compile Include="../../WindowDragGesture.cs" Link="WindowDragGesture.cs" />
+    <Compile Include="../../WindowStacking.cs" Link="WindowStacking.cs" />
+    <Compile Include="../../OverviewReturnGroup.cs" Link="OverviewReturnGroup.cs" />
+    <Compile Include="../../WindowMoveOperation.cs" Link="WindowMoveOperation.cs" />
   </ItemGroup>
 </Project>

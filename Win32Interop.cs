@@ -12,11 +12,15 @@ namespace WindowScatter
 
         internal delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
 
-        [DllImport("user32.dll")]
+        [DllImport("user32.dll", SetLastError = true)]
         internal static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, IntPtr lParam);
 
         [DllImport("user32.dll")]
         internal static extern bool IsWindowVisible(IntPtr hWnd);
+
+        [DllImport("user32.dll")]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        internal static extern bool IsWindow(IntPtr hWnd);
 
         [DllImport("user32.dll")]
         internal static extern int GetWindowTextLength(IntPtr hWnd);
@@ -27,7 +31,7 @@ namespace WindowScatter
         [DllImport("user32.dll")]
         internal static extern bool IsIconic(IntPtr hWnd);
 
-        [DllImport("user32.dll")]
+        [DllImport("user32.dll", SetLastError = true)]
         internal static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
 
         [DllImport("user32.dll")]
@@ -36,7 +40,7 @@ namespace WindowScatter
         [DllImport("user32.dll")]
         internal static extern bool SetForegroundWindow(IntPtr hWnd);
 
-        [DllImport("user32.dll")]
+        [DllImport("user32.dll", SetLastError = true)]
         internal static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int X, int Y, int cx, int cy, uint uFlags);
 
         [DllImport("user32.dll")]
@@ -45,19 +49,32 @@ namespace WindowScatter
         [DllImport("user32.dll")]
         internal static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
 
-        [DllImport("kernel32.dll")]
-        internal static extern uint GetCurrentThreadId();
+        [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        internal static extern int GetClassName(IntPtr hWnd, StringBuilder className, int capacity);
 
         [DllImport("user32.dll")]
-        internal static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool fAttach);
+        internal static extern IntPtr GetWindow(IntPtr hWnd, uint command);
 
         [DllImport("user32.dll")]
-        internal static extern bool BringWindowToTop(IntPtr hWnd);
+        internal static extern IntPtr GetTopWindow(IntPtr hWnd);
 
         [DllImport("user32.dll")]
-        internal static extern bool AllowSetForegroundWindow(int dwProcessId);
+        internal static extern int GetSystemMetricsForDpi(int index, uint dpi);
 
-        internal const int ASFW_ANY = -1;
+        [DllImport("user32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        internal static extern bool SetWindowPlacement(IntPtr hWnd, ref WINDOWPLACEMENT placement);
+
+        [DllImport("user32.dll")]
+        internal static extern IntPtr GetAncestor(IntPtr hWnd, uint flags);
+
+        [DllImport("user32.dll")]
+        internal static extern IntPtr GetLastActivePopup(IntPtr hWnd);
+
+        internal const uint GW_OWNER = 4;
+        internal const uint GW_HWNDNEXT = 2;
+        internal const uint GA_ROOTOWNER = 3;
+        internal const int GWL_STYLE = -16;
 
         #endregion
 
@@ -144,8 +161,43 @@ namespace WindowScatter
         [DllImport("kernel32.dll", CharSet = CharSet.Auto, SetLastError = true)]
         internal static extern IntPtr GetModuleHandle(string? lpModuleName);
 
-        [DllImport("user32.dll")]
-        internal static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo);
+        [DllImport("user32.dll", SetLastError = true)]
+        internal static extern uint SendInput(uint count, INPUT[] inputs, int size);
+
+        [StructLayout(LayoutKind.Sequential)]
+        internal struct INPUT
+        {
+            public uint type;
+            public INPUTUNION data;
+        }
+
+        [StructLayout(LayoutKind.Explicit)]
+        internal struct INPUTUNION
+        {
+            [FieldOffset(0)] public KEYBDINPUT keyboard;
+            [FieldOffset(0)] public MOUSEINPUT mouse;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        internal struct KEYBDINPUT
+        {
+            public ushort virtualKey;
+            public ushort scanCode;
+            public uint flags;
+            public uint time;
+            public UIntPtr extraInfo;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        internal struct MOUSEINPUT
+        {
+            public int dx;
+            public int dy;
+            public uint mouseData;
+            public uint flags;
+            public uint time;
+            public UIntPtr extraInfo;
+        }
 
         [DllImport("user32.dll", SetLastError = true)]
         internal static extern int GetWindowLong(IntPtr hWnd, int nIndex);
@@ -155,6 +207,7 @@ namespace WindowScatter
 
         internal const int GWL_EXSTYLE = -20;
         internal const int WS_EX_TOOLWINDOW = 0x00000080;
+        internal const int WS_EX_APPWINDOW = 0x00040000;
 
         internal const int WH_KEYBOARD_LL = 13;
         internal const int WM_KEYDOWN = 0x0100;
@@ -170,12 +223,20 @@ namespace WindowScatter
         internal const int VK_W = 0x57;
         internal const int VK_LWIN = 0x5B;
         internal const int VK_RWIN = 0x5C;
+        internal const int VK_LSHIFT = 0xA0;
+        internal const int VK_RSHIFT = 0xA1;
+        internal const int VK_LCONTROL = 0xA2;
+        internal const int VK_RCONTROL = 0xA3;
+        internal const int VK_LMENU = 0xA4;
+        internal const int VK_RMENU = 0xA5;
 
         #endregion
 
         #region Window Messages
 
         internal const int WM_SETTINGCHANGE = 0x001A;
+        internal const int WM_DISPLAYCHANGE = 0x007E;
+        internal const int WM_DPICHANGED = 0x02E0;
 
         #endregion
 
@@ -202,7 +263,7 @@ namespace WindowScatter
             public int Left, Top, Right, Bottom;
         }
 
-        [DllImport("user32.dll")]
+        [DllImport("user32.dll", SetLastError = true)]
         [return: MarshalAs(UnmanagedType.Bool)]
         internal static extern bool GetWindowPlacement(IntPtr hWnd, ref WINDOWPLACEMENT lpwndpl);
 
@@ -216,7 +277,7 @@ namespace WindowScatter
             public int showCmd;
             public System.Drawing.Point ptMinPosition;
             public System.Drawing.Point ptMaxPosition;
-            public System.Drawing.Rectangle rcNormalPosition;
+            public RECT rcNormalPosition;
         }
 
         #endregion
