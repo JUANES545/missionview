@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 24 24" role="img" aria-labelledby="title desc">
+  <title id="title">MissionView</title>
+  <desc id="desc">Three separate windows of unequal size, in green on graphite.</desc>
+  <path fill="#202522" d="M0 0H24V24H0Z"/>
+  <g fill="#7DDB9B">
+    <path d="M2 3H10V21H2Z"/>
+    <path d="M13 3H22V10H13Z"/>
+    <path d="M13 13H22V21H13Z"/>
+  </g>
+</svg>
