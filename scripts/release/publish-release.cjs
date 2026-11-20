@@ -4,6 +4,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 const { planFromGit, validateAssets, expectedAssets, assertReleaseReady } = require('./release.cjs');
+const { assertHistoricalSource, assertHistoricalTag,
+  assertHistoricalAssetMetadata, assertHistoricalAssetBytes } = require('./historical-release.cjs');
 
 async function findRelease(github, repo, tag) {
   try {
@@ -15,12 +17,16 @@ async function findRelease(github, repo, tag) {
 }
 
 async function verifyRemote(github, repo, release, plan) {
+  assertHistoricalSource(plan);
   const assets = await github.paginate(github.rest.repos.listReleaseAssets, {
     ...repo, release_id: release.id, per_page: 100
   });
-  if (assets.length !== 4 ||
+  if (assets.length !== 4 || new Set(assets.map(asset => asset.name)).size !== 4 ||
       assets.some(asset => !expectedAssets(plan.version).includes(asset.name))) {
     throw new Error('Remote release has missing or unexpected assets');
+  }
+  if (plan.version === '0.1.0') {
+    for (const asset of assets) assertHistoricalAssetMetadata(asset);
   }
   const directory = fs.mkdtempSync(path.join(process.env.RUNNER_TEMP ?? os.tmpdir(), 'missionview-verify-'));
   try {
@@ -28,7 +34,9 @@ async function verifyRemote(github, repo, release, plan) {
       const response = await github.rest.repos.getReleaseAsset({
         ...repo, asset_id: asset.id, headers: { accept: 'application/octet-stream' }
       });
-      fs.writeFileSync(path.join(directory, asset.name), Buffer.from(response.data));
+      const data = Buffer.from(response.data);
+      if (plan.version === '0.1.0') assertHistoricalAssetBytes(asset.name, data);
+      fs.writeFileSync(path.join(directory, asset.name), data);
     }
     validateAssets(directory, plan);
   } finally {
@@ -46,18 +54,44 @@ async function resolveTagCommit(github, repo, target) {
   return target.sha;
 }
 
-async function verifyPreviousRelease(github, repo, tag) {
+async function verifyPreviousRelease(github, repo, tag, equivalence = null) {
   const previous = await findRelease(github, repo, tag);
   if (!previous || previous.draft) {
     throw new Error(`Previous release ${tag} is incomplete; resolve it before advancing the sequence`);
   }
   const ref = (await github.rest.git.getRef({ ...repo, ref: `tags/${tag}` })).data;
+  if (tag === 'v0.1.0') {
+    assertHistoricalTag(ref);
+    if (previous.prerelease || !previous.published_at) {
+      throw new Error('Historical v0.1.0 must remain a published stable release');
+    }
+  }
+  if (equivalence && (ref.object.type !== 'tag' || ref.object.sha !== equivalence.originalTagObject ||
+      tag !== equivalence.originalTag || previous.prerelease || !previous.published_at)) {
+    throw new Error('Original published release or annotated tag changed during equivalence verification');
+  }
   const sha = await resolveTagCommit(github, repo, ref.object);
+  if (equivalence && sha !== equivalence.originalSourceSha) {
+    throw new Error('Original release source differs from the verified history');
+  }
   await verifyRemote(github, repo, previous, { version: tag.slice(1), sha });
 }
 
 async function prepare({ github, context, core }) {
   const plan = planFromGit(context.sha, true);
+  if (plan.historyEquivalence?.alreadyPublishedEquivalent) {
+    await verifyPreviousRelease(github, context.repo, plan.historyEquivalence.originalTag, plan.historyEquivalence);
+    core.notice(`Verified original ${plan.historyEquivalence.originalTag} for equivalent workflow ${context.sha}; nothing to publish.`);
+    core.setOutput('publish', 'false');
+    return;
+  }
+  if (plan.version === '0.1.0') {
+    assertHistoricalSource(plan);
+    await verifyPreviousRelease(github, context.repo, plan.tag);
+    core.notice('Verified immutable original v0.1.0; nothing to publish.');
+    core.setOutput('publish', 'false');
+    return;
+  }
   const release = await findRelease(github, context.repo, plan.tag);
   if (release && !release.draft) {
     await verifyRemote(github, context.repo, release, plan);
@@ -73,7 +107,7 @@ async function prepare({ github, context, core }) {
   }
   assertReleaseReady(JSON.parse(fs.readFileSync('installer/release-readiness.json', 'utf8')));
   if (!plan.existingTag && plan.previousTag) {
-    await verifyPreviousRelease(github, context.repo, plan.previousTag);
+    await verifyPreviousRelease(github, context.repo, plan.previousTag, plan.historyEquivalence ?? null);
   }
   core.setOutput('publish', 'true');
   core.setOutput('plan', JSON.stringify(plan));
@@ -81,9 +115,15 @@ async function prepare({ github, context, core }) {
 }
 
 async function publish({ github, context, core }, plan, directory) {
+  if (plan.tag !== `v${plan.version}`) throw new Error('Release tag differs from plan version');
   validateAssets(directory, plan);
   const repo = context.repo;
   if (plan.sha !== context.sha) throw new Error('Release SHA differs from workflow SHA');
+  if (plan.version === '0.1.0') {
+    await verifyPreviousRelease(github, repo, plan.tag);
+    core.notice('Verified immutable original v0.1.0; nothing to publish.');
+    return;
+  }
   const head = await github.rest.git.getRef({ ...repo, ref: 'heads/main' });
   if (head.data.object.sha !== plan.sha) throw new Error('Main advanced during packaging; rerun the latest SHA');
   assertReleaseReady(JSON.parse(fs.readFileSync('installer/release-readiness.json', 'utf8')));

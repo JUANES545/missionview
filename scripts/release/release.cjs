@@ -4,6 +4,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { execFileSync } = require('node:child_process');
+const { isAncestor, verifyHistoryEquivalence } = require('./history-equivalence.cjs');
+const { assertHistoricalSource, assertHistoricalAssetBytes } = require('./historical-release.cjs');
 
 function parseVersion(tag) {
   const match = /^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.exec(tag);
@@ -62,7 +64,9 @@ function planFromGit(sha, verifyAncestry = false) {
   const policy = JSON.parse(fs.readFileSync(path.join(__dirname, '../../installer/release-readiness.json'), 'utf8'));
   const plan = planFromTagRefs(tags, sha, policy.nextVersion ?? null);
   if (verifyAncestry && !plan.existingTag && plan.previousTag) {
-    git('merge-base', '--is-ancestor', plan.previousTag, sha);
+    if (!isAncestor(plan.previousTag, sha)) {
+      plan.historyEquivalence = verifyHistoryEquivalence(sha, plan.previousTag);
+    }
   }
   return plan;
 }
@@ -81,10 +85,16 @@ function assertReleaseReady(policy) {
 }
 
 function validateAssets(directory, plan) {
+  assertHistoricalSource(plan);
   const expected = expectedAssets(plan.version).sort();
   const actual = fs.readdirSync(directory).sort();
   if (JSON.stringify(actual) !== JSON.stringify(expected)) {
     throw new Error('Release directory must contain exactly the four expected assets');
+  }
+  if (plan.version === '0.1.0') {
+    for (const name of expected) {
+      assertHistoricalAssetBytes(name, fs.readFileSync(path.join(directory, name)));
+    }
   }
   const manifest = JSON.parse(fs.readFileSync(path.join(directory, 'release-manifest.json')));
   if (manifest.version !== plan.version || manifest.sourceSha !== plan.sha ||
