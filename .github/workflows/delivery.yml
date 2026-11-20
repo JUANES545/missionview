@@ -35,12 +35,21 @@ jobs:
         id: plan
         shell: pwsh
         run: node .\scripts\release\release.cjs
+      - name: Pure architecture boundaries
+        shell: pwsh
+        run: |
+          dotnet build .\tests\WindowScatter.CoreCheck -c Release --nologo
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          dotnet build .\tests\WindowScatter.CoreCheck -c Release --nologo -p:IncludeApplication=true
       - name: Portable tests
         shell: pwsh
         run: dotnet test .\tests\WindowScatter.LayoutTests -c Release --nologo
       - name: Isolated WPF tests
         shell: pwsh
         run: dotnet test .\tests\WindowScatter.WpfTests -c Release --nologo
+      - name: Offline update tests
+        shell: pwsh
+        run: dotnet test .\tests\MissionView.UpdateTests\MissionView.UpdateTests.csproj -c Release --nologo
       - name: Publish self-contained validation build
         shell: pwsh
         env:

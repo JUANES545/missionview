@@ -1,11 +1,29 @@
 using System.Runtime.InteropServices;
 using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
 using static WindowScatter.Win32Interop;
 
 namespace WindowScatter
 {
+    public sealed class OverviewDesktopButton : Button
+    {
+        // Space belongs to overview preview, including stale key routes to this control.
+        protected override void OnKeyDown(KeyEventArgs e)
+        {
+            if (e.Key == Key.Space) { e.Handled = true; return; }
+            base.OnKeyDown(e);
+        }
+
+        protected override void OnKeyUp(KeyEventArgs e)
+        {
+            if (e.Key == Key.Space) { e.Handled = true; return; }
+            base.OnKeyUp(e);
+        }
+    }
+
     // DWM thumbnails cover their destination HWND's WPF content. Chrome therefore
     // has its own owned surface above that HWND, never a thumbnail relationship.
     internal sealed class OverviewChromeWindow : Window

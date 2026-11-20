@@ -7,7 +7,7 @@ public class LayoutTests
     private static WindowInfo Win(int id, int x, int y, int w, int h) => new()
     {
         Handle = new IntPtr(id), Title = $"Window {id}", WasMaximized = false,
-        OriginalRect = new RECT { Left = x, Top = y, Right = x + w, Bottom = y + h }
+        OriginalRect = new PhysicalWindowRect { Left = x, Top = y, Right = x + w, Bottom = y + h }
     };
 
     private static List<WindowLayout> Calculate(List<WindowInfo> windows, double w = 1920, double h = 1080)

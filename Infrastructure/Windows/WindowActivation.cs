@@ -3,31 +3,53 @@ using static WindowScatter.Win32Interop;
 
 namespace WindowScatter
 {
-    internal readonly record struct WindowActivationTarget(IntPtr Handle, uint ThreadId, uint ProcessId);
-
     internal sealed class WindowActivation
     {
         private readonly Func<IntPtr, (uint Thread, uint Process)> identify;
         private readonly Action<IntPtr, int> show;
         private readonly Func<IntPtr, bool> activate;
         private readonly Func<IntPtr> foreground;
+        private readonly Func<IntPtr, bool> isMinimized;
 
         public WindowActivation() : this(IdentifyWindow,
-            (handle, command) => ShowWindow(handle, command), SetForegroundWindow, GetForegroundWindow) { }
+            (handle, command) => ShowWindow(handle, command), SetForegroundWindow, GetForegroundWindow, IsIconic) { }
 
         internal WindowActivation(Func<IntPtr, (uint Thread, uint Process)> identify,
-            Action<IntPtr, int> show, Func<IntPtr, bool> activate, Func<IntPtr> foreground)
+            Action<IntPtr, int> show, Func<IntPtr, bool> activate, Func<IntPtr> foreground,
+            Func<IntPtr, bool>? isMinimized = null)
         {
             this.identify = identify;
             this.show = show;
             this.activate = activate;
             this.foreground = foreground;
+            this.isMinimized = isMinimized ?? (_ => true);
         }
 
         public WindowActivationTarget Capture(IntPtr handle)
         {
             var identity = handle == IntPtr.Zero ? default : identify(handle);
             return new WindowActivationTarget(handle, identity.Thread, identity.Process);
+        }
+
+        public WindowActivationTarget CaptureUnderPointer()
+        {
+            if (!GetCursorPos(out var point))
+                throw new System.ComponentModel.Win32Exception(System.Runtime.InteropServices.Marshal.GetLastWin32Error(),
+                    "Windows could not read the pointer position.");
+            return CapturePointerWindow(WindowFromPoint(point));
+        }
+
+        internal WindowActivationTarget CapturePointerWindow(IntPtr hit)
+        {
+            if (hit == IntPtr.Zero) return default;
+            // Keep an owned dialog as the target; its owner's identity is resolved separately.
+            IntPtr root = GetAncestor(hit, GA_ROOT);
+            var target = Capture(root);
+            if (target.Handle == IntPtr.Zero || target.ThreadId == 0 || target.ProcessId == 0)
+                throw new InvalidOperationException("Point to an application window before opening App Expose.");
+            if (Capture(root) != target || GetAncestor(hit, GA_ROOT) != root)
+                throw new InvalidOperationException("The window under the pointer changed before it could be captured.");
+            return ApplicationIdentityReader.IsEligiblePointedWindow(target) ? target : default;
         }
 
         public bool TryActivate(WindowActivationTarget target, bool restore, bool wasMaximized, bool ownedForeground)
@@ -46,7 +68,7 @@ namespace WindowScatter
                 return false;
             }
 
-            if (restore)
+            if (restore && isMinimized(target.Handle))
                 show(target.Handle, wasMaximized ? SW_SHOWMAXIMIZED : SW_RESTORE);
 
             if (identify(target.Handle) != (target.ThreadId, target.ProcessId))

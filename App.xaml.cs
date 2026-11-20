@@ -4,13 +4,13 @@ namespace WindowScatter
 {
     public partial class App : Application
     {
-        internal AppSettings Settings { get; private set; } = null!;
+        internal ApplicationServices Services { get; private set; } = null!;
 
         protected override void OnStartup(StartupEventArgs e)
         {
             base.OnStartup(e);
-            try { Settings = AppSettings.Load(); }
-            catch (Exception ex) when (AppSettings.IsPersistenceError(ex))
+            try { Services = new ApplicationServices(JsonSettingsStore.ForCurrentUser()); }
+            catch (Exception ex) when (JsonSettingsStore.IsPersistenceError(ex))
             {
                 System.Diagnostics.Trace.TraceError($"Could not load or migrate settings: {ex}");
                 MessageBox.Show($"MissionView could not load or migrate your settings. No existing settings were replaced.\n\n{ex.Message}",

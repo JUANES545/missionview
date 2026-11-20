@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <IsTestProject>true</IsTestProject>
+    <IsPackable>false</IsPackable>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="..\..\Application\IUpdateService.cs" Link="IUpdateService.cs" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+    <PackageReference Include="xunit" Version="2.9.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
+    <Compile Include="..\..\Core\UpdateModels.cs" Link="UpdateModels.cs" />
+    <Compile Include="..\..\Infrastructure\Updates\UpdateService.cs" Link="UpdateService.cs" />
+    <Compile Include="..\..\Application\UpdateController.cs" Link="UpdateController.cs" />
+  </ItemGroup>
+</Project>

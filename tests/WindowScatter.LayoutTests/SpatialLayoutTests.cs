@@ -75,6 +75,6 @@ public class SpatialLayoutTests
 
     private static WindowInfo Win(int id, int x, int y, int w = 600, int h = 400) => new()
     {
-        Handle = new IntPtr(id), OriginalRect = new RECT { Left = x, Top = y, Right = x + w, Bottom = y + h }
+        Handle = new IntPtr(id), OriginalRect = new PhysicalWindowRect { Left = x, Top = y, Right = x + w, Bottom = y + h }
     };
 }
