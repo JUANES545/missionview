@@ -39,6 +39,7 @@ public partial class MainWindow
         try
         {
             OpenSettings();
+            settingsWindow?.ShowUpdates();
             await GetUpdateController().CheckAsync();
         }
         catch (Exception error)

@@ -2,12 +2,18 @@
   <PropertyGroup>
     <TargetFramework>net10.0-windows</TargetFramework>
     <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
     <IsTestProject>true</IsTestProject>
     <IsPackable>false</IsPackable>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
   </PropertyGroup>
   <ItemGroup>
+    <Using Remove="System.Windows.Forms" />
+    <Using Remove="System.Drawing" />
+    <Compile Include="../../Presentation/Wpf/Tray/MissionViewMenuRenderer.cs" Link="MissionViewMenuRenderer.cs" />
+    <Compile Include="../../Presentation/Wpf/Tray/MainWindow.Tray.cs" Link="MainWindow.Tray.cs" />
+    <Compile Include="../../Presentation/Wpf/Settings/SettingsControlStyles.cs" Link="SettingsControlStyles.cs" />
     <Compile Include="../../Presentation/Wpf/Theme/SharedBrushes.cs" Link="SharedBrushes.cs" />
     <Compile Include="../../Core/**/*.cs" Link="Core/%(RecursiveDir)%(Filename)%(Extension)" />
     <Compile Include="../../Application/**/*.cs" Link="Application/%(RecursiveDir)%(Filename)%(Extension)" />
@@ -21,6 +27,7 @@
     <PackageReference Include="xunit" Version="2.9.3" />
     <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
     <Compile Include="../../Presentation/Wpf/Overview/OverviewChromeWindow.cs" Link="OverviewChromeWindow.cs" />
+    <Compile Include="../../Presentation/Wpf/Overview/OverviewThumbnailCanvas.cs" Link="OverviewThumbnailCanvas.cs" />
     <Compile Include="../../Infrastructure/Windows/Win32Interop.cs" Link="Win32Interop.cs" />
     <Compile Include="../../Presentation/Wpf/Rendering/ThumbnailManager.cs" Link="ThumbnailManager.cs" />
     <Compile Include="../../Presentation/Wpf/Rendering/WindowAnimationManager.cs" Link="WindowAnimationManager.cs" />

@@ -24,21 +24,24 @@ namespace WindowScatter
             overviewHotkeys = new OverviewHotkeys(
                 (id, key) => RegisterHotKey(handle, id, key.NativeModifiers | 0x4000, (uint)key.Key),
                 id => UnregisterHotKey(handle, id));
-            if (!overviewHotkeys.TryInitialize(settings.Hotkey, out string error) ||
+            if (!overviewHotkeys.TryInitialize(settings.Hotkey, settings.AppExposeHotkey, out string error) ||
                 error.Length != 0)
                 Dispatcher.BeginInvoke(new Action(() => ReportShortcutError(error)), DispatcherPriority.Background);
         }
 
         internal bool TryApplyOverviewHotkey(string hotkey, out string error)
+            => TryApplyOverviewHotkeys(hotkey, settings.AppExposeHotkey, out error);
+
+        internal bool TryApplyOverviewHotkeys(string hotkey, string? appExposeHotkey, out string error)
         {
             Dispatcher.VerifyAccess();
-            if (!IsCoordinator) return coordinator.TryApplyOverviewHotkey(hotkey, out error);
+            if (!IsCoordinator) return coordinator.TryApplyOverviewHotkeys(hotkey, appExposeHotkey, out error);
             if (overviewHotkeys == null)
             {
                 error = "The overview shortcuts are not initialized.";
                 return false;
             }
-            if (!overviewHotkeys.TryApply(hotkey,
+            if (!overviewHotkeys.TryApply(hotkey, appExposeHotkey,
                 preserveExistingShiftShortcut: false,
                 out error))
             {

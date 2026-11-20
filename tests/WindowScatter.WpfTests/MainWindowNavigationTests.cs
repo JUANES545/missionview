@@ -368,7 +368,7 @@ namespace WindowScatter
         private DwmDragPreview? dragPreview;
         private DragPreviewGeometry? dragGeometry;
         private int enumeratedWindowCount => ViewThumbs.Count();
-        private readonly Canvas canvas = new();
+        private readonly OverviewThumbnailCanvas canvas = new();
         private readonly List<Window> sources = [];
         private readonly WindowAnimationManager animationManager;
         private ThumbnailManager thumbnailManager;
@@ -395,6 +395,8 @@ namespace WindowScatter
         private readonly List<Exception> errors = [];
         internal List<Exception> Errors => coordinator.errors;
         internal IntPtr Clicked { get; private set; }
+        internal int ActivationRequests { get; private set; }
+        internal OverviewThumbnailCanvas ThumbnailCanvas => canvas;
         internal IntPtr Selected => selectedWindowHandle;
         internal IReadOnlyList<WindowThumb> Thumbs => windowThumbs;
         internal MinimizedWindowStrip? Strip => minimizedStrip;
@@ -455,6 +457,10 @@ namespace WindowScatter
             foreach (var view in views) view.ResetPreview();
         }
 
+        internal void RestartSession() => scatterInteraction.BeginSession(default);
+        internal void RebindThumbnailAutomation(WindowThumb thumb) => ConfigureThumbnailAutomation(thumb);
+        internal void HideNormalSelectionOutline() => thumbnailManager.SetSelectedWindow(IntPtr.Zero);
+
         internal WindowThumb AddThumb(int id, double x, double y, double width, double height)
         {
             var thumb = new WindowThumb
@@ -470,9 +476,11 @@ namespace WindowScatter
             return thumb;
         }
 
-        internal void RemoveThumb(int id)
+        internal void RemoveThumb(int id) => RemoveThumb(new IntPtr(id));
+
+        internal void RemoveThumb(IntPtr handle)
         {
-            windowThumbs.RemoveAll(t => t.WindowHandle == new IntPtr(id));
+            windowThumbs.RemoveAll(t => t.WindowHandle == handle);
             InvalidateNavigation();
         }
 
@@ -512,6 +520,42 @@ namespace WindowScatter
             return thumb;
         }
 
+        internal IReadOnlyList<WindowThumb> RegisterNormalWindows(params string[] titles)
+        {
+            Show();
+            thumbnailManager = new(canvas, windowThumbs, new WindowInteropHelper(this).Handle, OnWindowClicked, OnWindowHovered);
+            thumbnailManager.ConfigureInput = ConfigureThumbnailAutomation;
+            var layouts = titles.Select((title, i) =>
+            {
+                var source = new Window
+                {
+                    Title = title, Width = 600, Height = 400, Left = -28000, Top = -26000,
+                    ShowActivated = false, ShowInTaskbar = false, Content = new Border { Background = Brushes.DarkGray }
+                };
+                sources.Add(source);
+                source.Show();
+                var handle = new WindowInteropHelper(source).Handle;
+                return new WindowLayout
+                {
+                    Window = new WindowInfo
+                    {
+                        Handle = handle, Identity = new WindowActivation().Capture(handle), Title = source.Title,
+                        OriginalRect = new PhysicalWindowRect { Left = -28000, Top = -26000, Right = -27400, Bottom = -25600 }
+                    },
+                    X = 100 + i * 400, Y = 100, Width = 300, Height = 200
+                };
+            }).ToList();
+            thumbnailManager.RegisterThumbnails(layouts, animationManager, settled: true);
+            thumbnailManager.SetPreviewAnimating(false);
+            canvas.Measure(new Size(1600, 1000));
+            canvas.Arrange(new Rect(0, 0, 1600, 1000));
+            canvas.UpdateLayout();
+            Assert.Equal(titles.Length, windowThumbs.Count);
+            Assert.DoesNotContain(FixtureHandles, h => h == Win32Interop.GetForegroundWindow());
+            InvalidateNavigation();
+            return windowThumbs;
+        }
+
         internal void ShowFixture()
         {
             Show();
@@ -523,7 +567,7 @@ namespace WindowScatter
 
         private IEnumerable<WindowThumb> ViewThumbs => windowThumbs.Concat(minimizedStrip?.Thumbs ?? []);
         private MainWindow? ViewFor(IntPtr handle) => views.FirstOrDefault(v => v.ViewThumbs.Any(t => t.WindowHandle == handle));
-        private void OnWindowClicked(IntPtr handle) { Clicked = handle; CancelSession(); }
+        private void OnWindowClicked(IntPtr handle) { ActivationRequests++; Clicked = handle; CancelSession(); }
         private void AbortOverview(Exception error) { Errors.Add(error); CancelSession(); }
         private void RequestDismissScatter() => CancelSession();
         private void ShowMoveMenu() => throw new NotSupportedException("Native move menus are not part of this fixture.");

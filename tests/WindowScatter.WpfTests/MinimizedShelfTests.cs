@@ -21,12 +21,17 @@ public class MinimizedShelfTests
         {
             var strip = new MinimizedWindowStrip([Info(1)], 1920, 1080, 1, _ => { }, _ => { }, _ => null);
             Arrange(strip, 1920, 1080);
-            Assert.Equal(264, strip.ActualWidth);
-            Assert.Equal(88, strip.ActualHeight);
+            Assert.Equal(264, strip.Width);
+            Assert.Equal(88, strip.Height);
+            Assert.Equal(Rounded(264, strip), strip.ActualWidth);
+            Assert.Equal(Rounded(88, strip), strip.ActualHeight);
             Assert.Equal(828, Canvas.GetLeft(strip));
             Assert.Equal(980, Canvas.GetTop(strip));
-            Assert.Equal(240, strip.Thumbs[0].ClickBorder.ActualWidth);
-            Assert.Equal(46, strip.Thumbs[0].ClickBorder.ActualHeight);
+            var tile = strip.Thumbs[0].ClickBorder;
+            Assert.Equal(240, tile.Width);
+            Assert.Equal(46, tile.Height);
+            Assert.Equal(Rounded(240, tile), tile.ActualWidth);
+            Assert.Equal(Rounded(46, tile), tile.ActualHeight);
         });
 
     [Theory]
@@ -63,11 +68,19 @@ public class MinimizedShelfTests
                 Assert.Equal(left, Canvas.GetLeft(strip));
                 Assert.Equal(top, Canvas.GetTop(strip));
                 Assert.Equal(reserved, strip.Geometry.ReservedHeight);
-                Assert.Equal(content, strip.NavigationTargets(false));
+                var current = strip.NavigationTargets(false);
+                Assert.Equal(content.Select(t => t.Identity), current.Select(t => t.Identity));
+                for (int i = 0; i < content.Length; i++)
+                {
+                    Assert.Equal(content[i].Bounds.X, current[i].Bounds.X, 8);
+                    Assert.Equal(content[i].Bounds.Y, current[i].Bounds.Y, 8);
+                    Assert.Equal(content[i].Bounds.Width, current[i].Bounds.Width);
+                    Assert.Equal(content[i].Bounds.Height, current[i].Bounds.Height);
+                }
                 Assert.All(strip.Thumbs, thumb =>
                 {
                     var point = thumb.ClickBorder.TranslatePoint(new Point(), canvas);
-                    // The detached WPF fixture retains the component's existing whole-DIP layout rounding.
+                    // The existing origin rounding allowance is separate from the arranged tile dimensions.
                     Assert.InRange(Math.Abs(point.X - thumb.TargetX / scale), 0, .50000001);
                     Assert.InRange(Math.Abs(point.Y - thumb.TargetY / scale), 0, .50000001);
                 });
@@ -78,7 +91,9 @@ public class MinimizedShelfTests
                     var point = thumb.ClickBorder.TranslatePoint(new Point(), canvas);
                     Assert.InRange(Math.Abs(point.X - target.Bounds.X / scale), 0, .50000001);
                     Assert.Equal(thumb.TargetX, target.Bounds.X, 8);
-                    Assert.Equal(thumb.TargetWidth, target.Bounds.Width, 8);
+                    Assert.Equal(thumb.ClickBorder.Width * scale, thumb.TargetWidth, 8);
+                    Assert.Equal(Rounded(thumb.ClickBorder.Width, thumb.ClickBorder), thumb.ClickBorder.RenderSize.Width);
+                    Assert.Equal(thumb.ClickBorder.RenderSize.Width * scale, target.Bounds.Width, 8);
                     Assert.InRange(target.Bounds.X, left * scale, (left + strip.Width) * scale);
                     Assert.True(target.Bounds.X + target.Bounds.Width <= (left + strip.Width) * scale);
                 });
@@ -112,7 +127,8 @@ public class MinimizedShelfTests
             }
             Assert.Equal(columns, strip.Geometry.Columns);
             Assert.Equal(rows, strip.Geometry.Rows);
-            Assert.Equal(rows == 1 ? 88 : 142, strip.ActualHeight);
+            Assert.Equal(rows == 1 ? 88 : 142, strip.Height);
+            Assert.Equal(Rounded(strip.Height, strip), strip.ActualHeight);
             Assert.InRange(strip.ActualWidth, 1, width - 32);
             Assert.Equal(Canvas.GetTop(strip) - 12, height - strip.Geometry.ReservedHeight);
             Assert.True(strip.Geometry.ReservedHeight <= height * .35);
@@ -120,12 +136,22 @@ public class MinimizedShelfTests
             Assert.Equal(count > columns * rows ? ScrollBarVisibility.Visible : ScrollBarVisibility.Hidden,
                 scroll.VerticalScrollBarVisibility);
             var content = OverviewNavigation.VisualOrder(strip.NavigationTargets(false));
+            var wrap = Descendants<WrapPanel>(strip).Single();
             Assert.Equal(count, content.Count);
             for (int i = 0; i < count; i++)
             {
-                Assert.Equal(46, content[i].Bounds.Height);
-                Assert.Equal((i % columns) * (strip.Geometry.ItemWidth + 8), content[i].Bounds.X);
-                Assert.Equal((i / columns) * 54, content[i].Bounds.Y);
+                var tile = strip.Thumbs[i].ClickBorder;
+                Assert.Equal(46, tile.Height);
+                Assert.Equal(strip.Geometry.ItemWidth, tile.Width);
+                Assert.Equal(new Thickness(0, 0, 8, 8), tile.Margin);
+                Assert.Equal(Rounded(46, tile), tile.RenderSize.Height);
+                var point = tile.TranslatePoint(new Point(), wrap);
+                Assert.Equal(point.X, content[i].Bounds.X, 8);
+                Assert.Equal(point.Y, content[i].Bounds.Y, 8);
+                Assert.Equal(tile.RenderSize.Width, content[i].Bounds.Width);
+                Assert.Equal(tile.RenderSize.Height, content[i].Bounds.Height);
+                Assert.Equal((i % columns) * (Rounded(tile.Width, tile) + 8), point.X, 8);
+                Assert.Equal((i / columns) * (Rounded(46, tile) + 8), point.Y, 8);
             }
             Assert.All(strip.NavigationTargets(true), t =>
             {
@@ -158,8 +184,13 @@ public class MinimizedShelfTests
             scroll.UpdateLayout();
             Assert.Equal(stable, OverviewNavigation.VisualOrder(strip.NavigationTargets(false)).Select(t => t.Identity));
             var clipped = strip.NavigationTargets(true).Single(t => t.Identity.Handle == new IntPtr(1));
-            Assert.Equal(29, clipped.Bounds.Height);
-            Assert.Equal(Canvas.GetTop(strip) + 32, clipped.Bounds.Y);
+            var tile = strip.Thumbs[0].ClickBorder;
+            var viewport = Descendants<ScrollContentPresenter>(scroll).Single();
+            var tilePoint = tile.TranslatePoint(new Point(), viewport);
+            Assert.Equal(17, scroll.VerticalOffset);
+            Assert.Equal(tile.RenderSize.Height + tilePoint.Y, clipped.Bounds.Height, 8);
+            Assert.Equal(viewport.TranslatePoint(new Point(), strip).Y + Canvas.GetTop(strip), clipped.Bounds.Y, 8);
+            Assert.Equal(-Rounded(17, tile), tilePoint.Y, 8);
             Assert.DoesNotContain(strip.NavigationTargets(true), t => t.Identity.Handle == new IntPtr(20));
         });
 
@@ -248,17 +279,23 @@ public class MinimizedShelfTests
 
     [Theory]
     [InlineData(1)]
+    [InlineData(1.25)]
     [InlineData(1.5)]
+    [InlineData(1.75)]
     [InlineData(2)]
     public void PublishedPhysicalRectanglesFollowEffectiveScale(double scale) => RunSta(() =>
     {
         var strip = new MinimizedWindowStrip([Info(1), Info(2)], 600, 600, scale, _ => { }, _ => { }, _ => null);
         Arrange(strip, 600, 600);
         var first = strip.NavigationTargets(true)[0];
-        Assert.Equal((Canvas.GetLeft(strip) + 12) * scale, first.Bounds.X);
-        Assert.Equal((Canvas.GetTop(strip) + 32) * scale, first.Bounds.Y);
-        Assert.Equal(240 * scale, first.Bounds.Width);
-        Assert.Equal(46 * scale, first.Bounds.Height);
+        var tile = strip.Thumbs[0].ClickBorder;
+        var point = tile.TranslatePoint(new Point(), strip);
+        Assert.Equal((Canvas.GetLeft(strip) + point.X) * scale, first.Bounds.X, 8);
+        Assert.Equal((Canvas.GetTop(strip) + point.Y) * scale, first.Bounds.Y, 8);
+        Assert.Equal(240, tile.Width);
+        Assert.Equal(46, tile.Height);
+        Assert.Equal(Rounded(240, tile) * scale, first.Bounds.Width);
+        Assert.Equal(Rounded(46, tile) * scale, first.Bounds.Height);
     });
 
     [Fact]
@@ -314,6 +351,14 @@ public class MinimizedShelfTests
         canvas.UpdateLayout();
         return canvas;
     }
+
+    private static double Rounded(double size, Visual visual)
+    {
+        var dpi = VisualTreeHelper.GetDpi(visual);
+        Assert.Equal(dpi.DpiScaleX, dpi.DpiScaleY);
+        return Math.Round(size * dpi.DpiScaleY) / dpi.DpiScaleY;
+    }
+
 
     private static void RunSta(Action test)
     {
