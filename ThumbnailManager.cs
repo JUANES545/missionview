@@ -16,34 +16,47 @@ namespace WindowScatter
         private readonly IntPtr ownerWindowHandle;
         private readonly Action<IntPtr> onWindowClicked;
         private readonly Action<IntPtr> onWindowHovered;
+        private readonly Func<IntPtr, (int Result, IntPtr Handle)> register;
+        public Action<WindowThumb>? ConfigureInput { get; set; }
+        public IReadOnlyList<IntPtr> SourceOrder { get; set; } = Array.Empty<IntPtr>();
 
         public ThumbnailManager(Canvas scatterCanvas, List<WindowThumb> windowThumbs,
-            IntPtr ownerWindowHandle, Action<IntPtr> onWindowClicked, Action<IntPtr> onWindowHovered)
+            IntPtr ownerWindowHandle, Action<IntPtr> onWindowClicked, Action<IntPtr> onWindowHovered,
+            Func<IntPtr, (int Result, IntPtr Handle)>? register = null)
         {
             this.scatterCanvas = scatterCanvas;
             this.windowThumbs = windowThumbs;
             this.ownerWindowHandle = ownerWindowHandle;
             this.onWindowClicked = onWindowClicked;
             this.onWindowHovered = onWindowHovered;
+            this.register = register ?? (source =>
+            {
+                int result = DwmRegisterThumbnail(ownerWindowHandle, source, out var thumbnail);
+                return (result, thumbnail);
+            });
         }
 
         /// <param name="dpiScale">Effective DPI scale of the target monitor (dpi/96).
         /// Layout coordinates are physical pixels (DWM space); WPF click targets
         /// live in DIPs, so geometry is divided by this scale (#10).</param>
-        public void RegisterThumbnails(List<WindowLayout> layouts, WindowAnimationManager animationManager, double dpiScale = 1.0)
+        public void RegisterThumbnails(List<WindowLayout> layouts, WindowAnimationManager animationManager,
+            double dpiScale = 1.0, bool settled = false)
         {
             if (dpiScale <= 0) dpiScale = 1.0;
 
-            foreach (var layout in layouts)
+            foreach (var layout in WindowStacking.BackToFront(layouts, l => l.Window.Handle, SourceOrder))
             {
                 var win = layout.Window;
                 bool wasMinimized = IsIconic(win.Handle);
+                if (wasMinimized) continue;
 
-                IntPtr thumbHandle;
-                int res = DwmRegisterThumbnail(ownerWindowHandle, win.Handle, out thumbHandle);
+                var (res, thumbHandle) = register(win.Handle);
 
                 if (res != 0 || thumbHandle == IntPtr.Zero)
+                {
+                    System.Diagnostics.Trace.TraceWarning($"DWM could not register an overview thumbnail: 0x{res:X8}.");
                     continue;
+                }
 
                 RECT currentRect = win.OriginalRect;
                 double startX = currentRect.Left;
@@ -77,6 +90,12 @@ namespace WindowScatter
                     CornerRadius = new System.Windows.CornerRadius(8),
                     Opacity = 0,
                     IsHitTestVisible = false,
+                    Child = new Border
+                    {
+                        BorderBrush = Brushes.Black,
+                        BorderThickness = new System.Windows.Thickness(2),
+                        CornerRadius = new System.Windows.CornerRadius(5)
+                    },
                     Effect = new DropShadowEffect
                     {
                         BlurRadius = 18,
@@ -92,7 +111,9 @@ namespace WindowScatter
                 var titleLabel = new TextBlock
                 {
                     Text = TrimTitle(win.Title),
-                    Width = Math.Max(140, targetW),
+                    Width = targetW,
+                    Height = 20,
+                    ClipToBounds = true,
                     Foreground = Brushes.White,
                     FontSize = 13,
                     FontWeight = System.Windows.FontWeights.SemiBold,
@@ -117,6 +138,8 @@ namespace WindowScatter
                     WindowHandle = win.Handle,
                     ThumbnailHandle = thumbHandle,
                     WasMinimized = wasMinimized,
+                    WasMaximized = win.WasMaximized,
+                    Identity = win.Identity,
                     ClickBorder = clickBorder,
                     HighlightBorder = highlightBorder,
                     TitleLabel = titleLabel,
@@ -131,23 +154,31 @@ namespace WindowScatter
                     TargetWidth = layout.Width,
                     TargetHeight = layout.Height,
 
-                    CurrentX = startX,
-                    CurrentY = startY,
-                    CurrentWidth = startW,
-                    CurrentHeight = startH
+                    CurrentX = settled ? layout.X : startX,
+                    CurrentY = settled ? layout.Y : startY,
+                    CurrentWidth = settled ? layout.Width : startW,
+                    CurrentHeight = settled ? layout.Height : startH
                 };
 
-                animationManager.UpdateThumbnailPosition(thumb);
+                if (!animationManager.UpdateThumbnailPosition(thumb))
+                {
+                    int cleanup = DwmUnregisterThumbnail(thumbHandle);
+                    System.Diagnostics.Trace.TraceWarning($"DWM rejected an overview thumbnail's initial bounds (cleanup 0x{cleanup:X8}).");
+                    continue;
+                }
 
                 clickBorder.Tag = thumb.WindowHandle;
-                clickBorder.MouseDown += ClickBorder_MouseDown;
-                clickBorder.MouseEnter += ClickBorder_MouseEnter;
+                if (ConfigureInput == null) clickBorder.MouseLeftButtonUp += ClickBorder_MouseDown;
+                clickBorder.MouseMove += ClickBorder_MouseMove;
 
                 scatterCanvas.Children.Add(highlightBorder);
                 scatterCanvas.Children.Add(titleLabel);
                 scatterCanvas.Children.Add(clickBorder);
                 windowThumbs.Add(thumb);
+                ConfigureInput?.Invoke(thumb);
             }
+            var logicalOrder = layouts.Select((l, i) => (l.Window.Handle, i)).ToDictionary(x => x.Handle, x => x.i);
+            windowThumbs.Sort((a, b) => logicalOrder[a.WindowHandle].CompareTo(logicalOrder[b.WindowHandle]));
         }
 
         /// <summary>
@@ -184,7 +215,7 @@ namespace WindowScatter
 
                 if (thumb.TitleLabel != null)
                 {
-                    thumb.TitleLabel.Width = Math.Max(140, w);
+                    thumb.TitleLabel.Width = w;
                     Canvas.SetLeft(thumb.TitleLabel, x + (w - thumb.TitleLabel.Width) / 2);
                     Canvas.SetTop(thumb.TitleLabel, y + h + 8);
                 }
@@ -205,6 +236,16 @@ namespace WindowScatter
             }
         }
 
+        public void BeginTransition(Action startTransition)
+        {
+            foreach (var thumb in windowThumbs)
+            {
+                if (thumb.HighlightBorder != null)
+                    thumb.HighlightBorder.Opacity = 0;
+            }
+            startTransition();
+        }
+
         public void ShowLabels(bool show)
         {
             foreach (var thumb in windowThumbs)
@@ -212,6 +253,13 @@ namespace WindowScatter
                 if (thumb.TitleLabel != null)
                     thumb.TitleLabel.Opacity = show ? 1 : 0;
             }
+        }
+
+        public void SetPreviewAnimating(bool animating)
+        {
+            ShowLabels(!animating);
+            foreach (var thumb in windowThumbs)
+                if (thumb.ClickBorder != null) thumb.ClickBorder.IsHitTestVisible = !animating;
         }
 
         public void CleanupAllThumbnails()
@@ -230,11 +278,11 @@ namespace WindowScatter
             windowThumbs.Clear();
         }
 
-        public void BringThumbnailToFront(IntPtr windowHandle, WindowAnimationManager animationManager)
+        public bool BringThumbnailToFront(IntPtr windowHandle, WindowAnimationManager animationManager)
         {
             var clickedThumb = windowThumbs.FirstOrDefault(t => t.WindowHandle == windowHandle);
             if (clickedThumb == null)
-                return;
+                return false;
 
             scatterCanvas.Children.Remove(clickedThumb.ClickBorder);
             scatterCanvas.Children.Remove(clickedThumb.HighlightBorder);
@@ -243,22 +291,36 @@ namespace WindowScatter
             scatterCanvas.Children.Add(clickedThumb.TitleLabel);
             scatterCanvas.Children.Add(clickedThumb.ClickBorder);
 
-            windowThumbs.Remove(clickedThumb);
-            windowThumbs.Add(clickedThumb);
-
             // DWM thumbnail order follows registration order, not canvas Z-order.
             if (clickedThumb.ThumbnailHandle != IntPtr.Zero)
             {
-                DwmUnregisterThumbnail(clickedThumb.ThumbnailHandle);
+                int result = DwmUnregisterThumbnail(clickedThumb.ThumbnailHandle);
+                if (result < 0)
+                {
+                    System.Diagnostics.Trace.TraceError($"DWM could not unregister the foreground thumbnail: 0x{result:X8}.");
+                    return false;
+                }
                 clickedThumb.ThumbnailHandle = IntPtr.Zero;
             }
 
             IntPtr newThumb;
-            if (DwmRegisterThumbnail(ownerWindowHandle, clickedThumb.WindowHandle, out newThumb) == 0)
+            int registration = DwmRegisterThumbnail(ownerWindowHandle, clickedThumb.WindowHandle, out newThumb);
+            if (registration >= 0 && newThumb != IntPtr.Zero)
             {
                 clickedThumb.ThumbnailHandle = newThumb;
-                animationManager.UpdateThumbnailPosition(clickedThumb);
+                if (animationManager.UpdateThumbnailPosition(clickedThumb)) return true;
+                System.Diagnostics.Trace.TraceError("DWM rejected the raised thumbnail's destination.");
+                return false;
             }
+            System.Diagnostics.Trace.TraceError($"DWM could not raise the foreground thumbnail: 0x{registration:X8}.");
+            return false;
+        }
+
+        public void RestoreSourceStacking(WindowAnimationManager animationManager)
+        {
+            foreach (var thumb in WindowStacking.BackToFront(windowThumbs, t => t.WindowHandle, SourceOrder))
+                if (!BringThumbnailToFront(thumb.WindowHandle, animationManager))
+                    throw new InvalidOperationException("DWM could not restore the source window stacking order.");
         }
 
         public void ReregisterAllThumbnails(WindowAnimationManager animationManager)
@@ -289,7 +351,7 @@ namespace WindowScatter
             e.Handled = true;
         }
 
-        private void ClickBorder_MouseEnter(object sender, MouseEventArgs e)
+        private void ClickBorder_MouseMove(object sender, MouseEventArgs e)
         {
             var border = sender as Border;
             if (border?.Tag is IntPtr windowHandle)

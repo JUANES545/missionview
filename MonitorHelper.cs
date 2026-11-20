@@ -12,8 +12,12 @@ namespace WindowScatter
         [DllImport("user32.dll")]
         private static extern IntPtr MonitorFromPoint(POINT pt, uint dwFlags);
 
-        [DllImport("user32.dll")]
+        [DllImport("user32.dll", SetLastError = true)]
         private static extern bool GetMonitorInfo(IntPtr hMonitor, ref MONITORINFO lpmi);
+
+        private delegate bool MonitorEnumProc(IntPtr monitor, IntPtr dc, ref RECT bounds, IntPtr data);
+        [DllImport("user32.dll", SetLastError = true)]
+        private static extern bool EnumDisplayMonitors(IntPtr dc, IntPtr clip, MonitorEnumProc callback, IntPtr data);
 
         private const uint MONITOR_DEFAULTTONEAREST = 0x00000002;
         private const uint MONITOR_DEFAULTTOPRIMARY = 0x00000001;
@@ -36,11 +40,14 @@ namespace WindowScatter
 
         public class MonitorBounds
         {
+            public IntPtr Handle { get; set; }
             public int Left { get; set; }
             public int Top { get; set; }
             public int Width { get; set; }
             public int Height { get; set; }
             public bool IsPrimary { get; set; }
+            public RECT WorkArea { get; set; }
+            public double DpiScale { get; set; } = 1;
 
             public int Right => Left + Width;
             public int Bottom => Top + Height;
@@ -115,32 +122,51 @@ namespace WindowScatter
             {
                 return new MonitorBounds
                 {
+                    Handle = hMonitor,
                     Left = info.rcMonitor.Left,
                     Top = info.rcMonitor.Top,
                     Width = info.rcMonitor.Right - info.rcMonitor.Left,
                     Height = info.rcMonitor.Bottom - info.rcMonitor.Top,
-                    IsPrimary = (info.dwFlags & 0x00000001) != 0
+                    IsPrimary = (info.dwFlags & 0x00000001) != 0,
+                    WorkArea = info.rcWork,
+                    DpiScale = GetDpiScaleAtPoint(info.rcMonitor.Left +
+                        (info.rcMonitor.Right - info.rcMonitor.Left) / 2,
+                        info.rcMonitor.Top + (info.rcMonitor.Bottom - info.rcMonitor.Top) / 2)
                 };
             }
 
-            return new MonitorBounds
-            {
-                Left = 0,
-                Top = 0,
-                Width = (int)System.Windows.SystemParameters.PrimaryScreenWidth,
-                Height = (int)System.Windows.SystemParameters.PrimaryScreenHeight,
-                IsPrimary = true
-            };
+            throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error(),
+                "Could not read monitor geometry.");
         }
 
-        public static bool IsWindowOnMonitor(RECT windowRect, MonitorBounds monitor)
+        public static List<MonitorBounds> GetMonitors()
         {
-            // Use the window center so large windows are assigned to a single monitor.
-            int centerX = (windowRect.Left + windowRect.Right) / 2;
-            int centerY = (windowRect.Top + windowRect.Bottom) / 2;
-
-            return centerX >= monitor.Left && centerX < monitor.Right &&
-                   centerY >= monitor.Top && centerY < monitor.Bottom;
+            var handles = new List<IntPtr>();
+            if (!EnumDisplayMonitors(IntPtr.Zero, IntPtr.Zero,
+                (IntPtr h, IntPtr dc, ref RECT rect, IntPtr data) => { handles.Add(h); return true; }, IntPtr.Zero))
+                throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error(), "Could not enumerate monitors.");
+            if (handles.Count == 0) throw new InvalidOperationException("No display monitors were reported.");
+            return handles.Select(GetMonitorBounds).ToList();
         }
+
+        public static MonitorBounds? FindWindowMonitor(RECT rect, IReadOnlyList<MonitorBounds> monitors)
+        {
+            MonitorBounds? best = null;
+            long bestArea = 0;
+            foreach (var monitor in monitors.OrderBy(m => m.Left).ThenBy(m => m.Top).ThenBy(m => m.Handle.ToInt64()))
+            {
+                long width = Math.Max(0L, (long)Math.Min(rect.Right, monitor.Right) - Math.Max(rect.Left, monitor.Left));
+                long height = Math.Max(0L, (long)Math.Min(rect.Bottom, monitor.Bottom) - Math.Max(rect.Top, monitor.Top));
+                long area = width * height;
+                if (area > bestArea) { bestArea = area; best = monitor; }
+            }
+            return best;
+        }
+
+        public static bool SameTopology(IReadOnlyList<MonitorBounds> before, IReadOnlyList<MonitorBounds> after) =>
+            before.Count == after.Count && before.All(a => after.Any(b => a.Handle == b.Handle &&
+                a.Left == b.Left && a.Top == b.Top && a.Width == b.Width && a.Height == b.Height &&
+                a.WorkArea.Equals(b.WorkArea) && Math.Abs(a.DpiScale - b.DpiScale) < .001));
+
     }
 }

@@ -14,6 +14,7 @@ namespace WindowScatter
 
         private readonly List<WindowThumb> windowThumbs;
         private readonly Dispatcher uiDispatcher;
+        private readonly Func<int> flush;
         private DWM_THUMBNAIL_PROPERTIES sharedProps;
 
         // The animation runs on a dedicated worker thread paced by DwmFlush, so it
@@ -27,6 +28,10 @@ namespace WindowScatter
         private int animGen;
         private long animStartTimestamp;
         private Action? onCompleteCallback;
+        private (WindowThumb Thumb, PreviewBounds Start, PreviewBounds End)[]? geometryFrames;
+        private Action<bool>? onGeometryComplete;
+        private bool geometryFailed;
+        private volatile bool motionEnabled;
 
         // Active DWM keep-alive: keeps DWM composing and GPU clocks warm while the
         // overlay sits idle, matching the effect of background video playback.
@@ -48,7 +53,9 @@ namespace WindowScatter
         private double frameLogStartPrivMb;
         private double returnStartDelayMs = -1;
 
-        public bool IsAnimating => animRunning;
+        public bool IsAnimating => animRunning && geometryFrames == null;
+        public bool IsPreviewAnimating => geometryFrames != null;
+        public void SetMotionEnabled(bool enabled) => motionEnabled = enabled;
 
         /// <summary>
         /// Invoked on the UI thread after the scatter animation settles.
@@ -56,10 +63,12 @@ namespace WindowScatter
         /// </summary>
         public Action? OnScatterComplete { get; set; }
 
-        public WindowAnimationManager(List<WindowThumb> windowThumbs)
+        public WindowAnimationManager(List<WindowThumb> windowThumbs, Func<int>? flush = null)
         {
             this.windowThumbs = windowThumbs;
             this.uiDispatcher = Dispatcher.CurrentDispatcher; // constructed on the UI thread
+            this.flush = flush ?? DwmFlush;
+            motionEnabled = System.Windows.SystemParameters.ClientAreaAnimation;
 
             sharedProps = new DWM_THUMBNAIL_PROPERTIES
             {
@@ -83,6 +92,22 @@ namespace WindowScatter
                 if (thumb.TitleLabel != null) thumb.TitleLabel.Opacity = 0;
             }
 
+            StartAnimThread();
+        }
+
+        public void StartPreviewAnimation(IntPtr selected, PreviewBounds expanded, Action<bool> onComplete)
+        {
+            StopAllAnimations();
+            onGeometryComplete = onComplete;
+            geometryFailed = false;
+            geometryFrames = windowThumbs.Select(t =>
+            {
+                var start = new PreviewBounds(t.CurrentX, t.CurrentY, t.CurrentWidth, t.CurrentHeight);
+                var end = t.WindowHandle == selected ? expanded :
+                    new PreviewBounds(t.TargetX, t.TargetY, t.TargetWidth, t.TargetHeight);
+                return (t, start, end);
+            }).ToArray();
+            animStartTimestamp = 0;
             StartAnimThread();
         }
 
@@ -140,6 +165,8 @@ namespace WindowScatter
             StopAnimThread();
             FlushFrameLog("stopped");
             isReturningToOriginal = false;
+            geometryFrames = null;
+            onGeometryComplete = null;
         }
 
         public void StartKeepAlive()
@@ -188,14 +215,14 @@ namespace WindowScatter
                 }
 
                 // Keeps DWM composing at native vsync with near-zero CPU usage.
-                DwmFlush();
+                flush();
             }
         }
 
-        public void UpdateThumbnailPosition(WindowThumb thumb, byte opacity = 255)
+        public bool UpdateThumbnailPosition(WindowThumb thumb, byte opacity = 255)
         {
             if (thumb.ThumbnailHandle == IntPtr.Zero)
-                return;
+                return false;
 
             var props = sharedProps;
             props.opacity = opacity;
@@ -204,7 +231,7 @@ namespace WindowScatter
             props.rcDestination.Right = (int)Math.Round(thumb.CurrentX + thumb.CurrentWidth);
             props.rcDestination.Bottom = (int)Math.Round(thumb.CurrentY + thumb.CurrentHeight);
 
-            DwmUpdateThumbnailProperties(thumb.ThumbnailHandle, ref props);
+            return DwmUpdateThumbnailProperties(thumb.ThumbnailHandle, ref props) >= 0;
         }
 
         private void StartAnimThread()
@@ -227,8 +254,8 @@ namespace WindowScatter
             animRunning = false;
             var thread = animThread;
             animThread = null;
-            if (thread != null && Thread.CurrentThread != thread && thread.IsAlive)
-                thread.Join();
+            if (thread != null && Thread.CurrentThread != thread && thread.IsAlive && !thread.Join(250))
+                System.Diagnostics.Trace.TraceWarning("DWM presentation did not release its animation worker within 250ms; generation cancelled.");
         }
 
         private void AnimLoop(int gen)
@@ -236,17 +263,33 @@ namespace WindowScatter
             long freq = System.Diagnostics.Stopwatch.Frequency;
             for (;;)
             {
+                if (gen != Volatile.Read(ref animGen) || !animRunning) return;
                 long iterStart = System.Diagnostics.Stopwatch.GetTimestamp();
                 if (animStartTimestamp == 0)
                     animStartTimestamp = iterStart;
 
                 double elapsed = (iterStart - animStartTimestamp) / (double)freq;
-                double progress = Math.Min(elapsed / ANIMATION_DURATION, 1.0);
+                bool animate = motionEnabled;
+                double duration = !animate ? 0 : ANIMATION_DURATION;
+                double progress = duration == 0 ? 1 : Math.Min(elapsed / duration, 1.0);
                 double e = 1 - Math.Pow(1 - progress, 3);
 
-                var thumbs = windowThumbs.ToArray();
-                foreach (var thumb in thumbs)
+                if (geometryFrames is { } geometry)
                 {
+                    foreach (var frame in geometry)
+                    {
+                        if (gen != Volatile.Read(ref animGen)) return;
+                        var bounds = PreviewBounds.Interpolate(frame.Start, frame.End, progress);
+                        frame.Thumb.CurrentX = bounds.X;
+                        frame.Thumb.CurrentY = bounds.Y;
+                        frame.Thumb.CurrentWidth = bounds.Width;
+                        frame.Thumb.CurrentHeight = bounds.Height;
+                        if (!UpdateThumbnailPosition(frame.Thumb) && gen == Volatile.Read(ref animGen)) geometryFailed = true;
+                    }
+                }
+                else foreach (var thumb in windowThumbs.ToArray())
+                {
+                    if (gen != Volatile.Read(ref animGen)) return;
                     double aspect = thumb.StartHeight > 0
                         ? thumb.StartWidth / thumb.StartHeight
                         : 1.0;
@@ -261,17 +304,20 @@ namespace WindowScatter
                     UpdateThumbnailPosition(thumb);
                 }
 
+                if (gen != Volatile.Read(ref animGen)) return;
                 RecordFrame();
 
                 // Blocks until DWM presents this frame: paces directly to display vsync.
-                DwmFlush();
+                flush();
 
+                if (gen != Volatile.Read(ref animGen)) return;
                 if (progress >= 1.0)
                     break;
                 if (!animRunning)
                     return;
             }
 
+            if (gen != Volatile.Read(ref animGen)) return;
             animRunning = false;
             uiDispatcher.BeginInvoke(new Action(() =>
             {
@@ -284,6 +330,14 @@ namespace WindowScatter
         // Runs on the UI thread: WPF touches and the dismiss callback live here.
         private void FinishAnimation()
         {
+            if (geometryFrames != null)
+            {
+                var completed = onGeometryComplete;
+                geometryFrames = null;
+                onGeometryComplete = null;
+                completed?.Invoke(!geometryFailed);
+                return;
+            }
             if (isReturningToOriginal)
             {
                 isReturningToOriginal = false;

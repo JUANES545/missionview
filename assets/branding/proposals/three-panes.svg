@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" role="img" aria-labelledby="title desc">
+  <title id="title">Three panes</title>
+  <desc id="desc">MissionView logo proposal: three separate windows of unequal size. Not an approved app icon.</desc>
+  <rect x="2" y="3" width="8" height="18" rx="1" fill="currentColor"/>
+  <rect x="13" y="3" width="9" height="7" rx="1" fill="currentColor"/>
+  <rect x="13" y="13" width="9" height="8" rx="1" fill="currentColor"/>
+</svg>
