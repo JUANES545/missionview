@@ -15,10 +15,13 @@ namespace WindowScatter
         private int enumeratedWindowCount;
         private readonly HashSet<ContextMenu> openMoveMenus = new();
         private string DisplayName => $"Display {coordinator.monitors.FindIndex(m => m.Handle == monitor.Handle) + 1}";
-        private string IdleMoveStatus => windowThumbs.Count < enumeratedWindowCount ? "Some previews unavailable" : "";
+        private string IdleMoveStatus => coordinator.appExposeRequest?.UnidentifiedWindows > 0
+            ? "Some windows could not be identified"
+            : coordinator.appExposeRequest?.WindowsOverLimit > 0 ? "Some application windows exceed the 20-window display limit"
+            : ViewThumbs.Count() < enumeratedWindowCount ? "Some previews unavailable" : "";
         private IEnumerable<MainWindow> OrderedViews() => views.OrderBy(v => v.monitor.Left).ThenBy(v => v.monitor.Top);
-        private IEnumerable<WindowThumb> AllThumbs() => OrderedViews().SelectMany(v => v.windowThumbs);
-        private MainWindow? ViewFor(IntPtr handle) => views.FirstOrDefault(v => v.windowThumbs.Any(t => t.WindowHandle == handle));
+        private IEnumerable<WindowThumb> AllThumbs() => OrderedViews().SelectMany(v => v.ViewThumbs);
+        private MainWindow? ViewFor(IntPtr handle) => views.FirstOrDefault(v => v.ViewThumbs.Any(t => t.WindowHandle == handle));
 
         private async System.Threading.Tasks.Task PrepareViewAsync(IReadOnlyList<IntPtr> sourceOrder, IntPtr desktopSource,
             List<WindowInfo> windows)
@@ -31,8 +34,6 @@ namespace WindowScatter
             Height = monitor.Height / currentDpiScale;
             Left = monitor.Left / currentDpiScale;
             Top = monitor.Top / currentDpiScale;
-            DropHint.Width = Math.Max(0, Width - 16);
-            DropHint.Height = Math.Max(0, Height - 80);
             MoveStatus.Width = Math.Max(0, Width - 88);
             EmptyMessage.Width = Math.Min(360, Math.Max(0, Width - 32));
             Canvas.SetLeft(EmptyMessage, (Width - EmptyMessage.Width) / 2);
@@ -55,17 +56,22 @@ namespace WindowScatter
 
         private void RebuildThumbnails(IReadOnlyList<IntPtr> sourceOrder, List<WindowInfo> windows, bool settled)
         {
+            InvalidateNavigation();
             animationManager.StopAllAnimations();
             thumbnailManager.CleanupAllThumbnails();
             enumeratedWindowCount = windows.Count;
-            var layouts = new WindowLayoutCalculator().CalculateLayouts(windows, monitor.Width, monitor.Height, currentDpiScale);
+            RebuildMinimizedStrip(windows, settled);
+            var layouts = new WindowLayoutCalculator().CalculateLayouts(windows.Where(w => !w.WasMinimized).ToList(),
+                monitor.Width, OverviewContentHeight, currentDpiScale);
             thumbnailManager.SourceOrder = sourceOrder;
             thumbnailManager.RegisterThumbnails(layouts, animationManager, currentDpiScale, settled);
             windowSwitcher = new WindowSwitcher(thumbnailManager, animationManager, windowThumbs, layouts);
             ChromeCanvas.Visibility = Visibility.Visible;
-            EmptyMessage.Text = windows.Count == 0 ? "No windows on this display.\nDrop a window here." :
+            EmptyMessage.Text = windows.Count == 0 ? coordinator.appExposeRequest != null
+                ? "No windows from this application on this display.\nDrop a window here."
+                : "No windows on this display.\nDrop a window here." :
                 "Window previews unavailable.\nDrop a window here.";
-            EmptyMessage.Visibility = windowThumbs.Count == 0 ? Visibility.Visible : Visibility.Hidden;
+            EmptyMessage.Visibility = !ViewThumbs.Any() ? Visibility.Visible : Visibility.Hidden;
             MoveStatus.Text = IdleMoveStatus;
             if (!settled) return;
             thumbnailManager.SyncClickBordersToThumbs(currentDpiScale);
@@ -95,26 +101,23 @@ namespace WindowScatter
 
         private void CleanupView()
         {
+            InvalidateNavigation();
+            CleanupMinimizedStrip();
             animationManager?.StopAllAnimations();
             thumbnailManager?.CleanupAllThumbnails();
             desktopCaptureManager?.Cleanup();
             previewExpanded = false;
-            if (dragThumbnail != IntPtr.Zero)
-            {
-                int result = DwmUnregisterThumbnail(dragThumbnail);
-                if (result < 0) System.Diagnostics.Trace.TraceError($"DWM drag cleanup failed: 0x{result:X8}.");
-                dragThumbnail = IntPtr.Zero;
-            }
+            dragPreview?.Dispose();
+            dragPreview = null;
         }
 
         private void CloseAllViews(WindowActivationTarget? selection)
         {
-            if (isClosing || isScatterActive || AnyAnimating || isTransitioning || movingWindow) return;
-            if (!scatterInteraction.TryBeginClose(selection, out var target)) return;
-            isTransitioning = true;
+            if (!session.TryBeginClose(selection, isClosing || isScatterActive || AnyAnimating || isTransitioning || movingWindow,
+                out var target)) return;
             CloseMoveMenus();
             int generation = scatterInteraction.Generation;
-            bool maximized = ViewFor(target.Handle)?.windowThumbs.FirstOrDefault(t => t.WindowHandle == target.Handle)?.WasMaximized == true;
+            bool maximized = ViewFor(target.Handle)?.ViewThumbs.FirstOrDefault(t => t.WindowHandle == target.Handle)?.WasMaximized == true;
             var group = new OverviewReturnGroup(views.Count,
                 () => !isClosing && generation == scatterInteraction.Generation,
                 () => OnSwitchComplete(target, selection.HasValue, maximized));
@@ -124,6 +127,7 @@ namespace WindowScatter
                 var sourceOrder = WindowStacking.Capture();
                 foreach (var view in views)
                 {
+                    if (view.minimizedStrip != null) view.minimizedStrip.Visibility = Visibility.Hidden;
                     view.thumbnailManager.BeginTransition(() =>
                     {
                         view.ResetPreview();
@@ -147,46 +151,6 @@ namespace WindowScatter
                 foreach (var view in views) view.animationManager.StopAllAnimations();
                 group.Finish();
             }
-        }
-
-        private bool Navigate(MainWindow sender, Key key)
-        {
-            if (key == Key.Tab)
-            {
-                var stops = new List<object>();
-                foreach (var view in OrderedViews())
-                {
-                    stops.AddRange(view.windowThumbs);
-                    stops.Add(view.DesktopButton);
-                }
-                object? current = stops.OfType<Button>().FirstOrDefault(b => b.IsKeyboardFocusWithin);
-                current ??= stops.OfType<WindowThumb>().FirstOrDefault(t => t.WindowHandle == selectedWindowHandle);
-                int direction = (Keyboard.Modifiers & ModifierKeys.Shift) == 0 ? 1 : -1;
-                int index = current == null ? direction > 0 ? -1 : 0 : stops.IndexOf(current);
-                object next = stops[(index + direction + stops.Count) % stops.Count];
-                if (next is Button button) button.Focus();
-                else if (next is WindowThumb thumb)
-                {
-                    SelectWindow(thumb.WindowHandle);
-                    activeView!.chromeWindow.Activate();
-                    activeView.chromeWindow.Focus();
-                }
-                return true;
-            }
-            if (key is Key.Left or Key.Right or Key.Up or Key.Down)
-            {
-                SelectWindowInDirection(key == Key.Left ? -1 : key == Key.Right ? 1 : 0,
-                    key == Key.Up ? -1 : key == Key.Down ? 1 : 0);
-                (activeView ?? sender).chromeWindow.Activate();
-                (activeView ?? sender).chromeWindow.Focus();
-                return true;
-            }
-            if (key == Key.Return)
-            {
-                if (selectedWindowHandle != IntPtr.Zero) OnWindowClicked(selectedWindowHandle);
-                return true;
-            }
-            return false;
         }
 
         private void ConfigureThumbnailInput(WindowThumb thumb)
@@ -239,15 +203,11 @@ namespace WindowScatter
                 try
                 {
                     var cursor = ReadPointer();
-                    var destination = views.FirstOrDefault(v => cursor.X >= v.monitor.Left && cursor.X < v.monitor.Right &&
-                        cursor.Y >= v.monitor.Top && cursor.Y < v.monitor.Bottom);
-                    var source = coordinator.dragSource!;
-                    var result = coordinator.drag.Release();
-                    coordinator.CancelDrag();
+                    var result = coordinator.FinishDrag(cursor);
                     if (result.Dragged)
                     {
-                        if (destination != null && !ReferenceEquals(destination, source))
-                            await coordinator.MoveWindowAsync(result.Target, source, destination);
+                        if (!ReferenceEquals(result.Destination, result.Source))
+                            await coordinator.MoveWindowAsync(result.Target, result.Source, result.Destination!);
                     }
                     else OnWindowClicked(result.Target.Handle);
                 }
@@ -272,80 +232,6 @@ namespace WindowScatter
             if (!Win32Interop.GetCursorPos(out var cursor))
                 throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error(), "Could not read the drag position.");
             return cursor;
-        }
-
-        private void StartDragPreview()
-        {
-            previewKey.Release();
-            foreach (var view in views)
-            {
-                view.ResetPreview();
-                view.animationManager.StopAllAnimations();
-                view.thumbnailManager.BeginTransition(() => { });
-                int result = DwmRegisterThumbnail(new WindowInteropHelper(view).Handle, drag.Target.Handle, out view.dragThumbnail);
-                if (result < 0 || view.dragThumbnail == IntPtr.Zero)
-                    throw new COMException("DWM could not create the drag preview.", result < 0 ? result : unchecked((int)0x80004005));
-                var props = new DWM_THUMBNAIL_PROPERTIES { dwFlags = DWM_TNP_VISIBLE, fVisible = false };
-                int update = DwmUpdateThumbnailProperties(view.dragThumbnail, ref props);
-                if (update < 0) throw new COMException("DWM could not initialize the drag preview.", update);
-            }
-            if (dragThumb != null && !dragSource!.animationManager.UpdateThumbnailPosition(dragThumb, 72))
-                throw new InvalidOperationException("DWM could not mark the dragged thumbnail.");
-        }
-
-        private void UpdateDragPreview(POINT cursor)
-        {
-            foreach (var view in views)
-            {
-                bool inside = cursor.X >= view.monitor.Left && cursor.X < view.monitor.Right &&
-                    cursor.Y >= view.monitor.Top && cursor.Y < view.monitor.Bottom;
-                bool valid = inside && !ReferenceEquals(view, dragSource) && view.enumeratedWindowCount < 20;
-                view.DropHint.Visibility = valid ? Visibility.Visible : Visibility.Hidden;
-                view.MoveStatus.Text = inside ? ReferenceEquals(view, dragSource) ? "Move to another display; Esc cancels" :
-                    valid ? "Release to move here" : "Display already shows 20 windows" : view.IdleMoveStatus;
-                double width = Math.Min(dragThumb!.TargetWidth, view.monitor.Width * .7);
-                double height = width * dragThumb.TargetHeight / dragThumb.TargetWidth;
-                if (height > view.monitor.Height * .7) { width *= view.monitor.Height * .7 / height; height = view.monitor.Height * .7; }
-                int left = (int)Math.Clamp(cursor.X - view.monitor.Left - width * dragGrabX, 0, view.monitor.Width - width);
-                int top = (int)Math.Clamp(cursor.Y - view.monitor.Top - height * dragGrabY, 0, view.monitor.Height - height);
-                var props = new DWM_THUMBNAIL_PROPERTIES
-                {
-                    dwFlags = DWM_TNP_RECTDESTINATION | DWM_TNP_VISIBLE | DWM_TNP_OPACITY | DWM_TNP_SOURCECLIENTAREAONLY,
-                    fVisible = inside, opacity = 230, fSourceClientAreaOnly = true,
-                    rcDestination = new RECT { Left = left, Top = top, Right = left + (int)width, Bottom = top + (int)height }
-                };
-                int result = DwmUpdateThumbnailProperties(view.dragThumbnail, ref props);
-                if (result < 0) throw new COMException("DWM could not move the drag preview.", result);
-            }
-        }
-
-        private void CancelDrag()
-        {
-            drag.Cancel();
-            var capture = dragCapture;
-            dragCapture = null;
-            if (capture?.IsMouseCaptured == true) capture.ReleaseMouseCapture();
-            foreach (var view in views.ToArray())
-            {
-                bool hadGhost = view.dragThumbnail != IntPtr.Zero;
-                if (hadGhost)
-                {
-                    int result = DwmUnregisterThumbnail(view.dragThumbnail);
-                    if (result < 0) System.Diagnostics.Trace.TraceError($"DWM drag cleanup failed: 0x{result:X8}.");
-                    view.dragThumbnail = IntPtr.Zero;
-                }
-                view.DropHint.Visibility = Visibility.Hidden;
-                if (view.monitor != null) view.MoveStatus.Text = view.IdleMoveStatus;
-                if (hadGhost && scatterInteraction.IsOpen && !isTransitioning && !isClosing && !movingWindow)
-                {
-                    if (dragThumb != null && ReferenceEquals(view, dragSource) && !view.animationManager.UpdateThumbnailPosition(dragThumb))
-                        System.Diagnostics.Trace.TraceError("DWM could not restore the source thumbnail after dragging.");
-                    view.thumbnailManager.SetSelectedWindow(selectedWindowHandle);
-                    view.animationManager.StartKeepAlive();
-                }
-            }
-            dragSource = null;
-            dragThumb = null;
         }
 
         private void ShowMoveMenu()
@@ -433,9 +319,9 @@ namespace WindowScatter
                 catch (Exception ex) { failure = ex; }
                 if (generation != scatterInteraction.Generation || !scatterInteraction.IsOpen || !EnsureTopology()) return;
                 var zOrder = WindowStacking.Capture();
-                var windows = windowEnumerator.EnumerateByMonitor(monitors);
+                var windows = EnumerateOverviewWindows();
                 foreach (var view in views) view.RebuildThumbnails(zOrder, windows[view.monitor.Handle], settled: true);
-                selection = IntPtr.Zero;
+                session.Select(IntPtr.Zero);
                 SelectWindow(AllThumbs().Any(t => t.WindowHandle == target.Handle) ? target.Handle :
                     AllThumbs().FirstOrDefault()?.WindowHandle ?? IntPtr.Zero);
                 if (failure == null) destination.MoveStatus.Text = AllThumbs().Any(t => t.WindowHandle == target.Handle)

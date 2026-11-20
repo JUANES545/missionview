@@ -22,7 +22,7 @@ namespace WindowScatter
         [return: MarshalAs(UnmanagedType.Bool)]
         internal static extern bool IsWindow(IntPtr hWnd);
 
-        [DllImport("user32.dll")]
+        [DllImport("user32.dll", SetLastError = true)]
         internal static extern int GetWindowTextLength(IntPtr hWnd);
 
         [DllImport("user32.dll", CharSet = CharSet.Unicode)]
@@ -69,11 +69,15 @@ namespace WindowScatter
         internal static extern IntPtr GetAncestor(IntPtr hWnd, uint flags);
 
         [DllImport("user32.dll")]
+        internal static extern IntPtr WindowFromPoint(POINT point);
+
+        [DllImport("user32.dll")]
         internal static extern IntPtr GetLastActivePopup(IntPtr hWnd);
 
         internal const uint GW_OWNER = 4;
         internal const uint GW_HWNDNEXT = 2;
         internal const uint GA_ROOTOWNER = 3;
+        internal const uint GA_ROOT = 2;
         internal const int GWL_STYLE = -16;
 
         #endregion
@@ -217,18 +221,18 @@ namespace WindowScatter
         internal const uint KEYEVENTF_KEYUP = 0x0002;
 
         internal const int VK_TAB = 0x09;
-        internal const int VK_SHIFT = 0x10;
-        internal const int VK_CONTROL = 0x11;
-        internal const int VK_MENU = 0x12;
+        internal const int VK_SHIFT = ModifierKeyCodes.VK_SHIFT;
+        internal const int VK_CONTROL = ModifierKeyCodes.VK_CONTROL;
+        internal const int VK_MENU = ModifierKeyCodes.VK_MENU;
         internal const int VK_W = 0x57;
-        internal const int VK_LWIN = 0x5B;
-        internal const int VK_RWIN = 0x5C;
-        internal const int VK_LSHIFT = 0xA0;
-        internal const int VK_RSHIFT = 0xA1;
-        internal const int VK_LCONTROL = 0xA2;
-        internal const int VK_RCONTROL = 0xA3;
-        internal const int VK_LMENU = 0xA4;
-        internal const int VK_RMENU = 0xA5;
+        internal const int VK_LWIN = ModifierKeyCodes.VK_LWIN;
+        internal const int VK_RWIN = ModifierKeyCodes.VK_RWIN;
+        internal const int VK_LSHIFT = ModifierKeyCodes.VK_LSHIFT;
+        internal const int VK_RSHIFT = ModifierKeyCodes.VK_RSHIFT;
+        internal const int VK_LCONTROL = ModifierKeyCodes.VK_LCONTROL;
+        internal const int VK_RCONTROL = ModifierKeyCodes.VK_RCONTROL;
+        internal const int VK_LMENU = ModifierKeyCodes.VK_LMENU;
+        internal const int VK_RMENU = ModifierKeyCodes.VK_RMENU;
 
         #endregion
 
@@ -282,7 +286,7 @@ namespace WindowScatter
 
         #endregion
 
-        [DllImport("user32.dll")]
+        [DllImport("user32.dll", SetLastError = true)]
         public static extern bool GetCursorPos(out POINT lpPoint);
 
         [DllImport("user32.dll")]

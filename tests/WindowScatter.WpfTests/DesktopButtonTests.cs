@@ -2,6 +2,7 @@ using System.Runtime.ExceptionServices;
 using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Automation.Peers;
+using System.Windows.Automation.Provider;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Markup;
@@ -14,7 +15,7 @@ using Xunit;
 public class DesktopButtonTests
 {
     [Fact]
-    public void ActualXamlUsesDecorativeVectorInsideNamedKeyboardAccessibleButton()
+    public void ActualXamlUsesDecorativeVectorInsideNamedMouseAndAutomationButton()
         => RunSta(() =>
         {
             var host = LoadWindow();
@@ -27,8 +28,8 @@ public class DesktopButtonTests
                 Assert.False(icon.Focusable);
                 Assert.False(icon.IsHitTestVisible);
                 Assert.Null(UIElementAutomationPeer.CreatePeerForElement(icon));
-                Assert.True(button.Focusable);
-                Assert.True(button.IsTabStop);
+                Assert.False(button.Focusable);
+                Assert.False(button.IsTabStop);
                 Assert.Equal((16d, 16d), (Canvas.GetLeft(button), Canvas.GetTop(button)));
                 Assert.Equal("Show desktop; press the activation shortcut again to restore windows.", button.ToolTip);
                 var peer = new ButtonAutomationPeer(button);
@@ -36,8 +37,113 @@ public class DesktopButtonTests
                 Assert.Equal("Show desktop", peer.GetName());
                 Assert.Empty(peer.GetChildren() ?? []);
                 button.ApplyTemplate();
-                Assert.NotNull(button.Template.Triggers.Cast<Trigger>().Single(t =>
-                    t.Property == UIElement.IsKeyboardFocusedProperty));
+                var frame = Assert.IsType<Border>(button.Template.FindName("Frame", button));
+                Assert.Equal(Colors.White, Assert.IsType<SolidColorBrush>(frame.BorderBrush).Color);
+            }
+            finally { host.Close(); }
+        });
+
+    [Fact]
+    public void DesktopButtonKeepsNeutralBorderAcrossHoverPressAndLegacyFocusStates()
+        => RunSta(() =>
+        {
+            var host = LoadWindow(controllableButtonStates: true);
+            try
+            {
+                var button = (Button)host.FindName("DesktopButton");
+                button.ApplyTemplate();
+                var frame = Assert.IsType<Border>(button.Template.FindName("Frame", button));
+                foreach (string state in new[] { "Normal", "Hover", "Focus", "Pressed" })
+                {
+                    button.Tag = state;
+                    button.UpdateLayout();
+                    Assert.Equal(Colors.White, Assert.IsType<SolidColorBrush>(frame.BorderBrush).Color);
+                    Assert.Equal(new Thickness(2), frame.BorderThickness);
+                    Assert.Equal(state == "Hover" ? Color.FromRgb(64, 64, 64) : Color.FromRgb(32, 32, 32),
+                        Assert.IsType<SolidColorBrush>(frame.Background).Color);
+                }
+                Assert.Null(button.FocusVisualStyle);
+            }
+            finally { host.Close(); }
+        });
+
+    [Fact]
+    public void DesktopActionCannotTakeTabFocusOrSpaceButRetainsAutomationInvoke()
+        => RunSta(() =>
+        {
+            var host = LoadWindow();
+            var content = (Canvas)host.FindName("ChromeCanvas");
+            var button = (Button)host.FindName("DesktopButton");
+            ((Canvas)host.Content).Children.Remove(content);
+            var chrome = new OverviewChromeWindow(host, content)
+            {
+                Topmost = false, ShowActivated = false,
+                Left = -32000, Top = -32000, Width = 320, Height = 200
+            };
+            try
+            {
+                new System.Windows.Interop.WindowInteropHelper(host).EnsureHandle();
+                chrome.Show();
+                chrome.UpdateLayout();
+                var peer = new ButtonAutomationPeer(button);
+                Assert.False(peer.IsKeyboardFocusable());
+                Assert.False(button.Focus());
+                Assert.False(button.IsKeyboardFocusWithin);
+                int clicked = 0;
+                button.Click += (_, _) => clicked++;
+                var source = PresentationSource.FromVisual(button)!;
+                void PressSpace()
+                {
+                    foreach (var routedEvent in new[] { Keyboard.KeyDownEvent, Keyboard.KeyUpEvent })
+                    {
+                        var input = new KeyEventArgs(Keyboard.PrimaryDevice, source, 0, Key.Space) { RoutedEvent = routedEvent };
+                        button.RaiseEvent(input);
+                        Assert.True(input.Handled);
+                        Assert.False(button.IsPressed);
+                    }
+                }
+                PressSpace();
+                Assert.Equal(0, clicked);
+                Assert.Equal("Show desktop", peer.GetName());
+                Assert.IsAssignableFrom<IInvokeProvider>(peer.GetPattern(PatternInterface.Invoke)).Invoke();
+                Dispatcher.CurrentDispatcher.Invoke(() => { }, DispatcherPriority.ApplicationIdle);
+                Assert.Equal(1, clicked);
+                PressSpace();
+                Assert.Equal(1, clicked);
+                Assert.NotEqual(new System.Windows.Interop.WindowInteropHelper(chrome).Handle, Win32Interop.GetForegroundWindow());
+                Assert.NotEqual(new System.Windows.Interop.WindowInteropHelper(host).Handle, Win32Interop.GetForegroundWindow());
+            }
+            finally { chrome.Close(); host.Close(); }
+        });
+
+    [Fact]
+    public void MoveFeedbackRetainsStatusWithoutADisplaySizedOutlineLayer()
+        => RunSta(() =>
+        {
+            var host = LoadWindow();
+            try
+            {
+                var content = (Canvas)host.FindName("ChromeCanvas");
+                var status = (TextBlock)host.FindName("MoveStatus");
+                content.Width = 800;
+                content.Height = 600;
+                foreach (var frame in content.Children.OfType<Border>())
+                {
+                    frame.Width = 784;
+                    frame.Height = 520;
+                    frame.Visibility = Visibility.Visible;
+                }
+                foreach (string message in new[] { "Release to move here", "Display already shows 20 windows", "Move to another display; Esc cancels" })
+                {
+                    status.Text = message;
+                    content.Measure(new Size(800, 600));
+                    content.Arrange(new Rect(0, 0, 800, 600));
+                    content.UpdateLayout();
+                    Assert.Equal(Visibility.Visible, status.Visibility);
+                    Assert.DoesNotContain(content.Children.OfType<Border>(), frame =>
+                        frame.Visibility == Visibility.Visible && frame.BorderBrush != null &&
+                        frame.BorderThickness != new Thickness(0) && frame.ActualWidth > 700 && frame.ActualHeight > 500);
+                }
             }
             finally { host.Close(); }
         });
@@ -123,11 +229,29 @@ public class DesktopButtonTests
     public void KeyboardMoveAlternativesWorkWithoutAVisibleOrHiddenButton(Key key, Key systemKey, ModifierKeys modifiers, bool expected)
         => Assert.Equal(expected, OverviewMoveShortcut.Matches(key, systemKey, modifiers));
 
-    private static Window LoadWindow()
+    private static Window LoadWindow(bool controllableButtonStates = false)
     {
         using var stream = typeof(DesktopButtonTests).Assembly.GetManifestResourceStream("MainWindow.xaml")!;
         var document = XDocument.Load(stream);
         document.Root!.Attribute(XName.Get("Class", "http://schemas.microsoft.com/winfx/2006/xaml"))!.Remove();
+        string controlsNamespace = $"clr-namespace:WindowScatter;assembly={typeof(OverviewChromeWindow).Assembly.GetName().Name}";
+        foreach (var element in document.Descendants().Where(e => e.Name.NamespaceName == "clr-namespace:WindowScatter"))
+            element.Name = XName.Get(element.Name.LocalName, controlsNamespace);
+        document.Root.SetAttributeValue(XNamespace.Xmlns + "local", controlsNamespace);
+        if (controllableButtonStates)
+        {
+            // Drive the real template setters without moving the mouse or giving a fixture keyboard focus.
+            foreach (var trigger in document.Descendants().Where(e => e.Name.LocalName == "Trigger"))
+            {
+                string? state = trigger.Attribute("Property")?.Value switch
+                {
+                    "IsMouseOver" => "Hover", "IsKeyboardFocused" => "Focus", "IsPressed" => "Pressed", _ => null
+                };
+                if (state == null) continue;
+                trigger.SetAttributeValue("Property", "Tag");
+                trigger.SetAttributeValue("Value", state);
+            }
+        }
         foreach (var attribute in document.Descendants().Attributes().Where(a =>
             a.Name.LocalName is "PreviewKeyDown" or "Click" or "MouseLeftButtonDown").ToArray())
             attribute.Remove();

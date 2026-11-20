@@ -58,7 +58,7 @@ namespace WindowScatter
                     continue;
                 }
 
-                RECT currentRect = win.OriginalRect;
+                PhysicalWindowRect currentRect = win.OriginalRect;
                 double startX = currentRect.Left;
                 double startY = currentRect.Top;
                 double startW = currentRect.Right - currentRect.Left;

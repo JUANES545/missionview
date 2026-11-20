@@ -8,20 +8,33 @@
     <ImplicitUsings>enable</ImplicitUsings>
   </PropertyGroup>
   <ItemGroup>
-    <EmbeddedResource Include="../../MainWindow.xaml" LogicalName="MainWindow.xaml" />
+    <Compile Include="../../Presentation/Wpf/Theme/SharedBrushes.cs" Link="SharedBrushes.cs" />
+    <Compile Include="../../Core/**/*.cs" Link="Core/%(RecursiveDir)%(Filename)%(Extension)" />
+    <Compile Include="../../Application/**/*.cs" Link="Application/%(RecursiveDir)%(Filename)%(Extension)" />
+    <Compile Include="../../Presentation/Wpf/Settings/SettingsWindow.cs" Link="SettingsWindow.cs" />
+    <Compile Include="../../Infrastructure/Preferences/JsonSettingsStore.cs" Link="JsonSettingsStore.cs" />
+    <Compile Include="../../Presentation/Wpf/Updates/UpdatePanel.cs" Link="UpdatePanel.cs" />
+    <Compile Include="../../Infrastructure/Updates/UpdateService.cs" Link="UpdateService.cs" />
+    <EmbeddedResource Include="../../Presentation/Wpf/Overview/MainWindow.xaml" LogicalName="MainWindow.xaml" />
+    <EmbeddedResource Include="../../assets/branding/MissionView.ico" LogicalName="MissionView.TrayIcon.ico" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
     <PackageReference Include="xunit" Version="2.9.3" />
     <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
-    <Compile Include="../../OverviewChromeWindow.cs" Link="OverviewChromeWindow.cs" />
-    <Compile Include="../../Win32Interop.cs" Link="Win32Interop.cs" />
-    <Compile Include="../../ThumbnailManager.cs" Link="ThumbnailManager.cs" />
-    <Compile Include="../../WindowAnimationManager.cs" Link="WindowAnimationManager.cs" />
-    <Compile Include="../../WindowInfo.cs" Link="WindowInfo.cs" />
-    <Compile Include="../../OverviewPreview.cs" Link="OverviewPreview.cs" />
-    <Compile Include="../../OverviewMoveShortcut.cs" Link="OverviewMoveShortcut.cs" />
-    <Compile Include="../../WindowLayoutCalculator.cs" Link="WindowLayoutCalculator.cs" />
-    <Compile Include="../../DesktopToggle.cs" Link="DesktopToggle.cs" />
-    <Compile Include="../../WindowActivation.cs" Link="WindowActivation.cs" />
-    <Compile Include="../../WindowStacking.cs" Link="WindowStacking.cs" />
+    <Compile Include="../../Presentation/Wpf/Overview/OverviewChromeWindow.cs" Link="OverviewChromeWindow.cs" />
+    <Compile Include="../../Infrastructure/Windows/Win32Interop.cs" Link="Win32Interop.cs" />
+    <Compile Include="../../Presentation/Wpf/Rendering/ThumbnailManager.cs" Link="ThumbnailManager.cs" />
+    <Compile Include="../../Presentation/Wpf/Rendering/WindowAnimationManager.cs" Link="WindowAnimationManager.cs" />
+    <Compile Include="../../Presentation/Wpf/Rendering/WindowThumb.cs" Link="WindowThumb.cs" />
+    <Compile Include="../../Presentation/Wpf/Overview/OverviewMoveShortcut.cs" Link="OverviewMoveShortcut.cs" />
+    <Compile Include="../../Infrastructure/Windows/DesktopToggle.cs" Link="DesktopToggle.cs" />
+    <Compile Include="../../Infrastructure/Windows/WindowActivation.cs" Link="WindowActivation.cs" />
+    <Compile Include="../../Infrastructure/Windows/WindowStacking.cs" Link="WindowStacking.cs" />
+    <Compile Include="../../Presentation/Wpf/Overview/MinimizedWindowStrip.cs" Link="MinimizedWindowStrip.cs" />
+    <Compile Include="../../Infrastructure/Windows/ApplicationIdentityReader.cs" Link="ApplicationIdentityReader.cs" />
+    <Compile Include="../../Infrastructure/Windows/WindowSurfacePolicy.cs" Link="WindowSurfacePolicy.cs" />
+    <Compile Include="../../Presentation/Wpf/Overview/MainWindow.Navigation.cs" Link="MainWindow.Navigation.cs" />
+    <Compile Include="../../Presentation/Wpf/Overview/MainWindow.Drag.cs" Link="MainWindow.Drag.cs" />
+    <Compile Include="../../Infrastructure/Windows/DwmDragPreview.cs" Link="DwmDragPreview.cs" />
+    <Compile Include="../../Infrastructure/Windows/MonitorHelper.cs" Link="MonitorHelper.cs" />
   </ItemGroup>
 </Project>

@@ -24,6 +24,8 @@ namespace WindowScatter
 
         private List<WindowThumb> windowThumbs = new List<WindowThumb>();
         private readonly MainWindow coordinator;
+        private readonly ApplicationServices services;
+        private OverviewSession session => services.Overview;
         private readonly List<MainWindow> views;
         private readonly ScatterInteraction scatterInteraction;
         private readonly WindowActivation windowActivation;
@@ -31,15 +33,16 @@ namespace WindowScatter
         private MainWindow? activeView;
         private MonitorHelper.MonitorBounds monitor = null!;
         private List<MonitorHelper.MonitorBounds> monitors = new();
-        private readonly WindowTransfer windowTransfer = new();
-        private readonly WindowMoveOperation moveOperation = new();
+        private WindowTransfer windowTransfer => services.Transfer;
+        private WindowMoveOperation moveOperation => services.Move;
         private CancellationTokenSource? moveCancellation;
         private readonly WindowDragGesture drag = new();
         private Border? dragCapture;
         private MainWindow? dragSource;
         private WindowThumb? dragThumb;
         private double dragGrabX, dragGrabY;
-        private IntPtr dragThumbnail;
+        private DwmDragPreview? dragPreview;
+        private DragPreviewGeometry? dragGeometry;
         private bool movingWindow;
         private bool reportingMoveError;
         private int topologyCancellationGeneration = -1;
@@ -48,21 +51,16 @@ namespace WindowScatter
         private double monitorPixelWidth;
         private double monitorPixelHeight;
         private POINT lastHoverPosition;
-        private IntPtr selection;
-        private IntPtr selectedWindowHandle { get => coordinator.selection; set => coordinator.selection = value; }
-
-        private bool opening;
-        private bool transitioning;
-        private bool isScatterActive { get => coordinator.opening; set => coordinator.opening = value; }
-        private bool isTransitioning { get => coordinator.transitioning; set => coordinator.transitioning = value; }
+        private IntPtr selectedWindowHandle => session.Selection;
+        private bool isScatterActive { get => session.Opening; set => session.Opening = value; }
+        private bool isTransitioning { get => session.Transitioning; set => session.Transitioning = value; }
         private object transitionLock => coordinator;
         private bool AnyAnimating => views.Any(v => v.animationManager != null && v.animationManager.IsAnimating);
         private bool IsCoordinator => ReferenceEquals(this, coordinator);
 
         private IntPtr hookID = IntPtr.Zero;
         private LowLevelKeyboardProc hookCallback = null!;
-        private HotkeyParser configuredHotkey;
-        private readonly KeyboardModifierState modifierKeyState = new();
+        private readonly OverviewShortcutInput shortcutInput;
 
         private HwndSource? hwndSource;
         private IntPtr hostHandle, chromeHandle;
@@ -101,11 +99,13 @@ namespace WindowScatter
         private MainWindow(MainWindow? parent)
         {
             coordinator = parent ?? this;
+            services = parent?.services ?? ((App)Application.Current).Services;
             views = parent?.views ?? new List<MainWindow> { this };
-            scatterInteraction = parent?.scatterInteraction ?? new();
-            windowActivation = parent?.windowActivation ?? new();
-            desktopToggle = parent?.desktopToggle ?? new();
-            previewKey = parent?.previewKey ?? new();
+            scatterInteraction = session.Interaction;
+            windowActivation = services.Activation;
+            shortcutInput = services.Shortcut;
+            desktopToggle = services.Desktop;
+            previewKey = session.PreviewKey;
             InitializeComponent();
             AccessKeyManager.Register("S", DesktopButton);
             RenderCanvas.Children.Remove(ChromeCanvas);
@@ -120,7 +120,6 @@ namespace WindowScatter
                     foreach (var view in views) view.ResetPreview();
                 }
             }));
-            DesktopButton.GotKeyboardFocus += (_, _) => ReleasePreviewForDesktopFocus();
             SystemParameters.StaticPropertyChanged += OnSystemParametersChanged;
             chromeWindow.Closed += (_, _) =>
             {
@@ -131,13 +130,17 @@ namespace WindowScatter
             SizeChanged += (_, _) => SyncChromeToHost();
             IsVisibleChanged += (_, _) => { if (!IsVisible && !chromeClosed) chromeWindow.Hide(); };
 
-            settings = parent?.settings ?? ((App)Application.Current).Settings;
-            configuredHotkey = HotkeyParser.Parse(settings.Hotkey);
+            settings = services.Settings;
 
             // Covers the plain .exe release too: registry follows settings (#15).
             if (IsCoordinator)
             {
-                settings.ApplyRunOnStartup();
+                try { StartupRegistration.Apply(settings.RunOnStartup); }
+                catch (Exception error) when (error is System.IO.IOException or UnauthorizedAccessException
+                    or System.Security.SecurityException or InvalidOperationException)
+                {
+                    ReportSettingsError(error);
+                }
                 SetupTrayIcon();
             }
 
@@ -197,6 +200,11 @@ namespace WindowScatter
 
             animationManager.OnScatterComplete = () =>
             {
+                if (minimizedStrip != null)
+                {
+                    minimizedStrip.Visibility = Visibility.Visible;
+                    minimizedStrip.SetSelected(selectedWindowHandle);
+                }
                 try { thumbnailManager.SyncClickBordersToThumbs(currentDpiScale); } catch { }
                 if (scatterInteraction.IsOpen && !isTransitioning && !coordinator.drag.IsPressed)
                     thumbnailManager.SetSelectedWindow(selectedWindowHandle);
@@ -245,6 +253,7 @@ namespace WindowScatter
             int exStyle = GetWindowLong(hwnd, GWL_EXSTYLE);
             exStyle |= WS_EX_TOOLWINDOW;
             SetWindowLong(hwnd, GWL_EXSTYLE, exStyle);
+            InitializeOverviewHotkeys(hwnd);
 
             if (!useDesktopCapture)
                 lastWallpaperPath = wallpaperManager.GetWallpaperPath();
@@ -289,36 +298,28 @@ namespace WindowScatter
         {
             if (nCode >= 0)
             {
-                int vkCode = Marshal.ReadInt32(lParam);
-
-                if (wParam == (IntPtr)WM_KEYDOWN || wParam == (IntPtr)WM_SYSKEYDOWN)
+                bool down = wParam == (IntPtr)WM_KEYDOWN || wParam == (IntPtr)WM_SYSKEYDOWN;
+                bool up = wParam == (IntPtr)WM_KEYUP || wParam == (IntPtr)WM_SYSKEYUP;
+                if (down || up)
                 {
-                    modifierKeyState.Update(vkCode, true);
-
-                    if (vkCode == configuredHotkey.VirtualKeyCode)
+                    int key = Marshal.ReadInt32(lParam);
+                    bool recording = false;
+                    QueryShortcutRecording(ref recording);
+                    var input = shortcutInput.Process(key, down, recording, overviewHotkeys);
+                    if (recording)
+                        RecordOverviewShortcutKey(key, input.Modifiers, down);
+                    if (input.Suppress)
                     {
-                        bool modifiersMatch = modifierKeyState.Matches(configuredHotkey.ModifierKeys);
-                        bool toggle = scatterInteraction.ActivationKeyDown(modifiersMatch);
-                        if (modifiersMatch)
-                        {
-                            if ((configuredHotkey.ModifierKeys & 0x0A) != 0)
-                                KeyboardMenuMask.TrySend(SendInput);
-                            if (toggle)
+                        if ((input.Modifiers & 0x0A) != 0)
+                            KeyboardMenuMask.TrySend(SendInput);
+                        if (input.Activate)
+                            this.Dispatcher.BeginInvoke(new Action(async () =>
                             {
-                                this.Dispatcher.BeginInvoke(new Action(async () =>
-                                {
-                                    await ToggleScatterAsync();
-                                }));
-                            }
-                            return (IntPtr)1;
-                        }
+                                if (input.AppExpose) await ToggleAppExposeAsync(input.Foreground, input.ApplicationWindow, input.CaptureError);
+                                else await ToggleScatterAsync();
+                            }));
+                        return (IntPtr)1;
                     }
-                }
-                else if (wParam == (IntPtr)WM_KEYUP || wParam == (IntPtr)WM_SYSKEYUP)
-                {
-                    modifierKeyState.Update(vkCode, false);
-                    if (vkCode == configuredHotkey.VirtualKeyCode)
-                        scatterInteraction.ActivationKeyUp();
                 }
             }
 
@@ -329,60 +330,6 @@ namespace WindowScatter
 
         #region Event Handlers
 
-        private void Window_KeyDown(object sender, KeyEventArgs e)
-        {
-            if (Keyboard.FocusedElement is MenuItem) return;
-            bool escape = e.Key == Key.Escape || (e.Key == Key.System && e.SystemKey == Key.Escape);
-            if (coordinator.drag.IsPressed)
-            {
-                if (escape && !e.IsRepeat) coordinator.CancelDrag();
-                e.Handled = true;
-                return;
-            }
-            if (DesktopButton.IsKeyboardFocusWithin &&
-                (e.Key == Key.Space || e.Key == Key.Return))
-                return;
-
-            if (scatterInteraction.IsOpen && !isScatterActive && !AnyAnimating && !isTransitioning && !coordinator.movingWindow)
-            {
-                if (OverviewMoveShortcut.Matches(e.Key, e.SystemKey, Keyboard.Modifiers))
-                {
-                    coordinator.ShowMoveMenu();
-                    e.Handled = true;
-                    return;
-                }
-                if (e.Key == Key.Space)
-                {
-                    if (previewKey.Press(e.IsRepeat)) coordinator.activeView?.ExpandPreview();
-                    e.Handled = true;
-                    return;
-                }
-                if (HandleScatterNavigationKey(e.Key))
-                {
-                    e.Handled = true;
-                    return;
-                }
-            }
-
-            bool isEsc = e.Key == Key.Escape ||
-                         (e.Key == Key.System && e.SystemKey == Key.Escape);
-
-            if (isEsc && !e.IsRepeat)
-            {
-                e.Handled = true;
-                RequestDismissScatter();
-            }
-        }
-
-        private void Window_KeyUp(object sender, KeyEventArgs e)
-        {
-            if (e.Key != Key.Space || DesktopButton.IsKeyboardFocusWithin) return;
-            if (previewKey.Release() && scatterInteraction.IsOpen && !isTransitioning)
-                foreach (var view in views.Where(v => v.previewExpanded || v.animationManager.IsPreviewAnimating))
-                    view.AnimatePreview(IntPtr.Zero, default);
-            e.Handled = true;
-        }
-
         private void ScatterCanvas_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
         {
             // Thumbnail borders handle their own clicks. Only bare canvas hits
@@ -390,11 +337,6 @@ namespace WindowScatter
             if (!ReferenceEquals(e.OriginalSource, ScatterCanvas)) return;
             e.Handled = true;
             RequestDismissScatter();
-        }
-
-        private bool HandleScatterNavigationKey(Key key)
-        {
-            return coordinator.Navigate(this, key);
         }
 
         protected override void OnClosed(EventArgs e)
@@ -419,6 +361,9 @@ namespace WindowScatter
                 base.OnClosed(e);
                 return;
             }
+            settingsWindow?.Close();
+            updateController?.Dispose();
+            trayIcon?.ContextMenuStrip?.Dispose();
             try { trayIcon?.Dispose(); } catch { }
             trayIcon = null;
             trayImage?.Dispose();
@@ -440,6 +385,8 @@ namespace WindowScatter
                 UnhookWindowsHookEx(hookID);
                 hookID = IntPtr.Zero;
             }
+            if (overviewHotkeys?.Release() == false)
+                System.Diagnostics.Trace.TraceWarning("Windows could not release all overview shortcuts during shutdown.");
 
             try
             {
@@ -553,27 +500,24 @@ namespace WindowScatter
         private void TryDismissScatter()
         {
             bool busy = isScatterActive || AnyAnimating || isTransitioning || coordinator.movingWindow;
-            if (scatterInteraction.TakeConfirmationRequest(busy) && this.Visibility == Visibility.Visible)
+            switch (session.TakeCloseRequest(busy, Visibility == Visibility.Visible))
             {
-                if (selectedWindowHandle != IntPtr.Zero)
-                    OnWindowClicked(selectedWindowHandle);
-                else
-                    CleanupAndClose();
-                return;
+                case OverviewCloseRequest.ConfirmSelection: OnWindowClicked(selectedWindowHandle); break;
+                case OverviewCloseRequest.Cancel: CleanupAndClose(); break;
             }
-            if (scatterInteraction.TakeDismissRequest(busy) && this.Visibility == Visibility.Visible)
-                CleanupAndClose();
         }
 
-        private async System.Threading.Tasks.Task StartScatterAsync()
+        private async System.Threading.Tasks.Task StartScatterAsync(AppExposeRequest? request = null)
         {
             if (!CanActivateScatter()) return;
             isScatterActive = true;
             int generation = 0;
             try
             {
-                IntPtr previousWindow = GetForegroundWindow();
-                scatterInteraction.BeginSession(windowActivation.Capture(previousWindow));
+                appExposeRequest = request;
+                var previous = request?.Foreground ?? windowActivation.Capture(GetForegroundWindow());
+                IntPtr previousWindow = previous.Handle;
+                scatterInteraction.BeginSession(previous);
                 generation = scatterInteraction.Generation;
                 monitors = MonitorHelper.GetMonitors().OrderBy(m => m.Left).ThenBy(m => m.Top).ToList();
                 var pointerMonitor = MonitorHelper.GetMonitorFromCursor();
@@ -603,7 +547,7 @@ namespace WindowScatter
                 SetThreadExecutionState(ES_CONTINUOUS | ES_DISPLAY_REQUIRED | ES_SYSTEM_REQUIRED);
 
                 var sourceOrder = WindowStacking.Capture();
-                var windows = windowEnumerator.EnumerateByMonitor(monitors);
+                var windows = EnumerateOverviewWindows();
                 IntPtr desktopSource = views.Any(v => v.useDesktopCapture) ? DesktopCaptureManager.GetDesktopWindowHandle() : IntPtr.Zero;
                 foreach (var view in views)
                 {
@@ -646,135 +590,6 @@ namespace WindowScatter
             var thumb = coordinator.AllThumbs().FirstOrDefault(t => t.WindowHandle == windowHandle);
             if (thumb != null) coordinator.CloseAllViews(thumb.Identity);
         }
-
-        private void OnWindowHovered(IntPtr windowHandle)
-        {
-            if (scatterInteraction.IsOpen && !AnyAnimating && !isTransitioning && !coordinator.drag.IsPressed && !coordinator.movingWindow)
-            {
-                if (!Win32Interop.GetCursorPos(out var cursor))
-                {
-                    System.Diagnostics.Trace.TraceWarning("Could not read the pointer position for thumbnail selection.");
-                    return;
-                }
-                if (cursor.X == coordinator.lastHoverPosition.X && cursor.Y == coordinator.lastHoverPosition.Y) return;
-                coordinator.lastHoverPosition = cursor;
-                SelectWindow(windowHandle);
-            }
-        }
-
-        private void SelectNextWindow(int direction)
-        {
-            var all = AllThumbs().ToList();
-            if (all.Count == 0) return;
-
-            int currentIndex = all.FindIndex(t => t.WindowHandle == selectedWindowHandle);
-            if (currentIndex < 0) currentIndex = direction > 0 ? -1 : 0;
-
-            int nextIndex = (currentIndex + direction + all.Count) % all.Count;
-            SelectWindow(all[nextIndex].WindowHandle);
-        }
-
-        private void SelectWindowInDirection(int dx, int dy)
-        {
-            var targets = AllThumbs()
-                .Select(t => new NavigationTarget(t.Identity, GetCenterX(t), GetCenterY(t))).ToList();
-            if (targets.Count != 0)
-                SelectWindow(OverviewNavigation.Select(targets, selectedWindowHandle, dx, dy));
-        }
-
-        private void SelectWindow(IntPtr windowHandle)
-        {
-            if (!IsCoordinator) { coordinator.SelectWindow(windowHandle); return; }
-            if (selectedWindowHandle == windowHandle) return;
-            selectedWindowHandle = windowHandle;
-            activeView = ViewFor(windowHandle) ?? activeView ?? this;
-            foreach (var view in views)
-            {
-                if (view != activeView && (view.previewExpanded || view.animationManager.IsPreviewAnimating))
-                    view.AnimatePreview(IntPtr.Zero, default);
-                view.thumbnailManager?.SetSelectedWindow(isScatterActive || view.animationManager.IsPreviewAnimating
-                    ? IntPtr.Zero : windowHandle);
-            }
-            if (previewKey.IsHeld) activeView.ExpandPreview();
-        }
-
-        private void ExpandPreview()
-        {
-            var thumb = windowThumbs.FirstOrDefault(t => t.WindowHandle == selectedWindowHandle);
-            if (thumb == null) return;
-            animationManager.StopAllAnimations();
-            var bounds = OverviewPreview.Fit(thumb.StartWidth, thumb.StartHeight, monitorPixelWidth,
-                monitorPixelHeight, Math.Min(WindowLayoutCalculator.ToolbarHeight * currentDpiScale,
-                    monitorPixelHeight * .4), currentDpiScale);
-            if (!thumbnailManager.BringThumbnailToFront(thumb.WindowHandle, animationManager))
-            {
-                AbortOverview(new InvalidOperationException("DWM could not raise the live preview."));
-                return;
-            }
-            previewExpanded = true;
-            AnimatePreview(thumb.WindowHandle, new(bounds.X, bounds.Y, bounds.Width, bounds.Height));
-        }
-
-        private void AnimatePreview(IntPtr selected, PreviewBounds bounds)
-        {
-            int generation = scatterInteraction.Generation;
-            thumbnailManager.SetPreviewAnimating(true);
-            thumbnailManager.BeginTransition(() => animationManager.StartPreviewAnimation(selected, bounds, success =>
-            {
-                if (isClosing || !scatterInteraction.IsOpen || generation != scatterInteraction.Generation) return;
-                if (!success)
-                {
-                    AbortOverview(new InvalidOperationException("DWM could not animate the live preview."));
-                    return;
-                }
-                if (isClosing || isTransitioning || !IsVisible || !scatterInteraction.IsOpen) return;
-                previewExpanded = previewKey.IsHeld && ReferenceEquals(this, coordinator.activeView);
-                if (selected == IntPtr.Zero)
-                {
-                    try { thumbnailManager.RestoreSourceStacking(animationManager); }
-                    catch (Exception ex) { AbortOverview(ex); return; }
-                }
-                thumbnailManager.SyncClickBordersToThumbs(currentDpiScale);
-                thumbnailManager.SetPreviewAnimating(false);
-                thumbnailManager.SetSelectedWindow(selectedWindowHandle);
-                animationManager.StartKeepAlive();
-            }));
-        }
-
-        private void ResetPreview()
-        {
-            previewKey.Release();
-            if (!previewExpanded && !animationManager.IsPreviewAnimating) return;
-            animationManager.StopAllAnimations();
-            previewExpanded = false;
-            foreach (var thumb in windowThumbs)
-            {
-                thumb.CurrentX = thumb.TargetX;
-                thumb.CurrentY = thumb.TargetY;
-                thumb.CurrentWidth = thumb.TargetWidth;
-                thumb.CurrentHeight = thumb.TargetHeight;
-                if (!animationManager.UpdateThumbnailPosition(thumb))
-                    System.Diagnostics.Trace.TraceError("DWM could not restore a thumbnail to its overview slot.");
-            }
-            thumbnailManager.SyncClickBordersToThumbs(currentDpiScale);
-            if (!isTransitioning && scatterInteraction.IsOpen && this.Visibility == Visibility.Visible)
-            {
-                thumbnailManager.SetPreviewAnimating(false);
-                thumbnailManager.SetSelectedWindow(selectedWindowHandle);
-                animationManager.StartKeepAlive();
-            }
-        }
-
-        private void ReleasePreviewForDesktopFocus()
-        {
-            previewKey.Release();
-            if (!isTransitioning && scatterInteraction.IsOpen)
-                foreach (var view in views.Where(v => v.previewExpanded || v.animationManager.IsPreviewAnimating))
-                    view.AnimatePreview(IntPtr.Zero, default);
-        }
-
-        private double GetCenterX(WindowThumb thumb) => ViewFor(thumb.WindowHandle)!.monitor.Left + thumb.TargetX + thumb.TargetWidth / 2.0;
-        private double GetCenterY(WindowThumb thumb) => ViewFor(thumb.WindowHandle)!.monitor.Top + thumb.TargetY + thumb.TargetHeight / 2.0;
 
         private void OnSwitchComplete(WindowActivationTarget target, bool restore, bool wasMaximized)
         {
@@ -851,7 +666,7 @@ namespace WindowScatter
 
         /// <summary>
         /// Keeps the app recallable while hidden: tray icon re-triggers scatter on
-        /// double-click and exposes Run-on-startup + Exit (#12, #15).
+        /// double-click and exposes preferences and app actions.
         /// </summary>
         private void SetupTrayIcon()
         {
@@ -869,9 +684,13 @@ namespace WindowScatter
                 };
 
                 var menu = new System.Windows.Forms.ContextMenuStrip();
+                var version = (typeof(MainWindow).Assembly.GetName().Version
+                    ?? throw new InvalidOperationException("The MissionView application version is missing.")).ToString(3);
+                menu.Items.Add(new System.Windows.Forms.ToolStripMenuItem($"MissionView v{version}") { Enabled = false });
+                menu.Items.Add(new System.Windows.Forms.ToolStripSeparator());
 
                 var triggerItem = new System.Windows.Forms.ToolStripMenuItem(
-                    "Scatter windows",
+                    "Open overview",
                     null,
                     async (s, e) =>
                     {
@@ -881,36 +700,53 @@ namespace WindowScatter
                         });
                     });
 
-                var startupItem = new System.Windows.Forms.ToolStripMenuItem("Run on startup")
+                overviewTrayItem = triggerItem;
+                triggerItem.ShortcutKeyDisplayString = settings.Hotkey;
+                var startupItem = new System.Windows.Forms.ToolStripMenuItem("Start with Windows")
                 {
                     Checked = settings.RunOnStartup,
                     CheckOnClick = true
                 };
                 startupItem.Click += (s, e) =>
                 {
-                    settings.TrySetRunOnStartup(startupItem.Checked, settings.ApplyRunOnStartup, error =>
-                    {
-                        System.Diagnostics.Trace.TraceError($"Could not save settings: {error}");
-                        MessageBox.Show($"MissionView could not save your settings. The previous startup preference is unchanged.\n\n{error.Message}",
-                            "MissionView", MessageBoxButton.OK, MessageBoxImage.Error);
-                    });
+                    var candidate = settings.Copy();
+                    candidate.RunOnStartup = startupItem.Checked;
+                    ApplyPreferences(candidate);
                     startupItem.Checked = settings.RunOnStartup;
                 };
+                startupTrayItem = startupItem;
 
                 var exitItem = new System.Windows.Forms.ToolStripMenuItem(
-                    "Exit", null, (s, e) => { Close(); });
+                    "Quit", null, (s, e) => { Close(); });
 
                 menu.Items.Add(triggerItem);
                 menu.Items.Add(new System.Windows.Forms.ToolStripMenuItem(
                     "Show / restore desktop", null, (s, e) =>
                     {
-                        if (isTransitioning || isScatterActive || animationManager.IsAnimating) return;
+                        if (isTransitioning || isScatterActive || AnyAnimating) return;
                         if (this.Visibility == Visibility.Visible) DesktopButton_Click(this, new RoutedEventArgs());
                         else RequestDesktopToggle();
                     }));
+                menu.Items.Add(new System.Windows.Forms.ToolStripSeparator());
+                menu.Items.Add(new System.Windows.Forms.ToolStripMenuItem("Settings...", null, (_, _) => OpenSettings()));
+                updatesTrayItem = new System.Windows.Forms.ToolStripMenuItem("Check for updates...", null, async (_, _) => await RunUpdateAction());
+                menu.Items.Add(updatesTrayItem);
                 menu.Items.Add(startupItem);
+                menu.Items.Add(new System.Windows.Forms.ToolStripMenuItem("About MissionView", null, (_, _) =>
+                    MessageBox.Show($"MissionView\nVersion {version}\n\nA window overview for Windows.",
+                        "About MissionView", MessageBoxButton.OK, MessageBoxImage.Information)));
                 menu.Items.Add(new System.Windows.Forms.ToolStripSeparator());
                 menu.Items.Add(exitItem);
+                if (!System.Windows.Forms.SystemInformation.HighContrast)
+                {
+                    menu.Renderer = new MissionViewMenuRenderer();
+                    menu.BackColor = System.Drawing.Color.FromArgb(32, 37, 34);
+                    menu.ForeColor = System.Drawing.Color.FromArgb(243, 245, 244);
+                }
+                menu.ShowImageMargin = false;
+                menu.Padding = new System.Windows.Forms.Padding(4);
+                foreach (System.Windows.Forms.ToolStripItem item in menu.Items)
+                    item.Padding = new System.Windows.Forms.Padding(8, 5, 8, 5);
                 trayIcon.ContextMenuStrip = menu;
 
                 trayIcon.DoubleClick += async (s, e) =>
@@ -1069,6 +905,7 @@ namespace WindowScatter
 
         private void FullCleanup()
         {
+            appExposeRequest = null;
             moveCancellation?.Cancel();
             CancelDrag();
             foreach (var view in views.ToArray()) view.CleanupView();
@@ -1090,7 +927,7 @@ namespace WindowScatter
             animationManager?.StopAllAnimations();
             thumbnailManager?.CleanupAllThumbnails();
 
-            selectedWindowHandle = IntPtr.Zero;
+            session.Select(IntPtr.Zero);
             activeView = null;
 
             desktopCaptureManager?.Cleanup();

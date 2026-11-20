@@ -23,6 +23,7 @@
     <!-- standalone spike project lives under spike/; keep it out of this compilation -->
     <Compile Remove="spike\**\*.cs" />
     <Compile Remove="tests\**\*.cs" />
+    <Compile Remove="Infrastructure\Windows\Experimental\**\*.cs" />
     <None Remove="spike\**\*.csproj" />
   </ItemGroup>
 
