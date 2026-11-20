@@ -8,7 +8,38 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { publish, findRelease, verifyRemote, verifyPreviousRelease } = require('./publish-release.cjs');
 const { expectedAssets } = require('./release.cjs');
-const plan = { sha: 'a'.repeat(40), version: '0.1.0', tag: 'v0.1.0' };
+const plan = { sha: 'a'.repeat(40), version: '0.2.0', tag: 'v0.2.0' };
+
+for (const mismatch of [
+  { ...plan, version: '0.2.0', tag: 'v0.1.0' },
+  { sha: '445ca5936a6ddabcac0cc4010509912b406e9398', version: '0.1.0', tag: 'v0.2.0' }
+]) {
+  test(`rejects ${mismatch.version}/${mismatch.tag} before API access or effects`, async () => {
+    let apiAccesses = 0;
+    let effects = 0;
+    const api = new Proxy({}, {
+      get() {
+        apiAccesses++;
+        throw new Error('Unexpected API access');
+      }
+    });
+    const local = fixture();
+    const before = fs.readdirSync(local.directory).sort().map(name =>
+      [name, fs.readFileSync(path.join(local.directory, name))]);
+    try {
+      await assert.rejects(() => publish({
+        github: api, context: { sha: mismatch.sha, repo: { owner: 'fixture', repo: 'fixture' } },
+        core: { notice() { effects++; }, setOutput() { effects++; } }
+      }, mismatch, local.directory), /Release tag differs from plan version/);
+      assert.equal(apiAccesses, 0);
+      assert.equal(effects, 0);
+      assert.deepEqual(fs.readdirSync(local.directory).sort(), expectedAssets(plan.version).sort());
+      for (const [name, bytes] of before) {
+        assert(fs.readFileSync(path.join(local.directory, name)).equals(bytes));
+      }
+    } finally { local.dispose(); }
+  });
+}
 
 function fixture(build = plan) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'missionview-publication-test-'));

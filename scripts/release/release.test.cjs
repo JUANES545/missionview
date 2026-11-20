@@ -87,7 +87,7 @@ test('public releases require explicit approval and an empty blocker list', () =
 
 test('release assets reject tampering, traversal, extra files and mismatched source', () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'missionview-release-test-'));
-  const plan = planRelease([], sha);
+  const plan = planRelease([{ name: 'v0.1.9', sha: otherSha }], sha, '0.2.0');
   const names = expectedAssets(plan.version);
   try {
     fs.writeFileSync(path.join(directory, names[0]), 'zip fixture');
