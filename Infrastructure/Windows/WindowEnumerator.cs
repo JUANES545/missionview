@@ -26,7 +26,8 @@ namespace WindowScatter
             IReadOnlyList<MonitorHelper.MonitorBounds> monitors) =>
             EnumerateByMonitor(monitors).GetValueOrDefault(targetMonitor.Handle) ?? new();
 
-        public Dictionary<IntPtr, List<WindowInfo>> EnumerateByMonitor(IReadOnlyList<MonitorHelper.MonitorBounds> monitors)
+        public Dictionary<IntPtr, List<WindowInfo>> EnumerateByMonitor(IReadOnlyList<MonitorHelper.MonitorBounds> monitors,
+            AppExposeRequest? request = null)
         {
             var windows = new List<(IntPtr Monitor, WindowInfo Window)>();
 
@@ -42,12 +43,13 @@ namespace WindowScatter
                     uint thread = GetWindowThreadProcessId(h, out uint process);
                     if (thread == 0 || process == 0) return true;
                     bool minimized = IsIconic(h);
-                    if (minimized) return true;
+                    if (minimized && request == null) return true;
 
                     int extendedStyle = GetWindowLong(h, GWL_EXSTYLE);
                     if (extendedStyle == 0 && Marshal.GetLastWin32Error() != 0)
                     {
                         System.Diagnostics.Trace.TraceWarning("Could not read a window's extended styles during enumeration.");
+                        request?.RecordUnavailableWindow();
                         return true;
                     }
                     if (!WindowSurfacePolicy.IsEligible(unchecked((uint)extendedStyle)))
@@ -71,18 +73,29 @@ namespace WindowScatter
                     var placement = new WINDOWPLACEMENT { length = Marshal.SizeOf<WINDOWPLACEMENT>() };
                     if (!GetWindowPlacement(h, ref placement))
                         throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error(), "GetWindowPlacement failed.");
-                    RECT rect;
-                    if (!GetWindowRect(h, out rect))
-                        throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error(), "GetWindowRect failed.");
-                    int frameResult = DwmGetWindowAttribute(h, DWMWA_EXTENDED_FRAME_BOUNDS, out var dwmRect, Marshal.SizeOf<RECT>());
-                    if (frameResult >= 0)
-                        rect = dwmRect;
+                    WindowInfo? window;
+                    MonitorHelper.MonitorBounds? source;
+                    if (minimized)
+                    {
+                        IntPtr monitorHandle = MonitorFromWindow(h, 2); // Last normal placement, not the iconic (-32000) rectangle.
+                        source = monitors.FirstOrDefault(m => m.Handle == monitorHandle);
+                        if (source == null) return true;
+                        window = CreateMinimizedWindowInfo(h, title, placement, unchecked((uint)extendedStyle), source);
+                    }
                     else
-                        System.Diagnostics.Trace.TraceWarning($"Frame bounds unavailable for HWND 0x{h.ToInt64():X}: 0x{frameResult:X8}; using GetWindowRect.");
-                    var source = MonitorHelper.FindWindowMonitor(rect, monitors);
-                    if (source == null) return true;
-                    var window = CreateWindowInfo(h, title, minimized, rect, placement.showCmd == SW_SHOWMAXIMIZED,
-                        unchecked((uint)extendedStyle), source, monitors);
+                    {
+                        if (!GetWindowRect(h, out var rect))
+                            throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error(), "GetWindowRect failed.");
+                        int frameResult = DwmGetWindowAttribute(h, DWMWA_EXTENDED_FRAME_BOUNDS, out var dwmRect, Marshal.SizeOf<RECT>());
+                        if (frameResult >= 0)
+                            rect = dwmRect;
+                        else
+                            System.Diagnostics.Trace.TraceWarning($"Frame bounds unavailable for HWND 0x{h.ToInt64():X}: 0x{frameResult:X8}; using GetWindowRect.");
+                        source = MonitorHelper.FindWindowMonitor(rect, monitors);
+                        if (source == null) return true;
+                        window = CreateWindowInfo(h, title, false, rect, placement.showCmd == SW_SHOWMAXIMIZED,
+                            unchecked((uint)extendedStyle), source, monitors);
+                    }
                     if (window != null && GetWindowThreadProcessId(h, out uint currentProcess) == thread && currentProcess == process)
                     {
                         window.Identity = new(h, thread, process);
@@ -93,6 +106,7 @@ namespace WindowScatter
                 {
                     int error = ex is System.ComponentModel.Win32Exception native ? native.NativeErrorCode : ex.HResult;
                     System.Diagnostics.Trace.TraceWarning($"Window metadata failed for HWND 0x{h.ToInt64():X}: {ex.GetType().Name}, code 0x{error:X8}, {ex.Message}");
+                    request?.RecordUnavailableWindow();
                 }
 #if ENUMERATION_DIAGNOSTICS
                 finally { diagnostics.Capture(h); }
@@ -103,7 +117,7 @@ namespace WindowScatter
             if (!enumerationSucceeded)
                 throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error(), "Could not enumerate windows.");
 
-            var grouped = GroupByMonitor(windows, monitors);
+            var grouped = GroupByMonitor(windows, monitors, request);
 
 #if ENUMERATION_DIAGNOSTICS
             diagnostics.Write(System.IO.Path.Combine(AppContext.BaseDirectory, WindowEnumerationDiagnostics.FileName),
@@ -114,12 +128,18 @@ namespace WindowScatter
 
         internal static Dictionary<IntPtr, List<WindowInfo>> GroupByMonitor(
             IEnumerable<(IntPtr Monitor, WindowInfo Window)> windows,
-            IReadOnlyList<MonitorHelper.MonitorBounds> monitors)
+            IReadOnlyList<MonitorHelper.MonitorBounds> monitors, AppExposeRequest? request = null)
         {
             var grouped = monitors.ToDictionary(m => m.Handle, _ => new List<WindowInfo>());
             foreach (var item in windows)
-                if (grouped.TryGetValue(item.Monitor, out var group) && group.Count < MAX_WINDOWS)
-                    group.Add(item.Window);
+            {
+                if (request != null && !request.Includes(item.Window.Identity)) continue;
+                if (grouped.TryGetValue(item.Monitor, out var group))
+                {
+                    if (group.Count < MAX_WINDOWS) group.Add(item.Window);
+                    else request?.RecordWindowOverLimit();
+                }
+            }
             return grouped;
         }
 
@@ -134,13 +154,33 @@ namespace WindowScatter
             return new WindowInfo
             {
                 Handle = handle, Title = title, WasMaximized = maximized,
-                OriginalRect = new RECT
+                OriginalRect = new PhysicalWindowRect
                 {
                     Left = rect.Left - target.Left, Right = rect.Right - target.Left,
                     Top = rect.Top - target.Top, Bottom = rect.Bottom - target.Top
                 }
             };
         }
+
+        internal static WindowInfo? CreateMinimizedWindowInfo(IntPtr handle, string title,
+            WINDOWPLACEMENT placement, uint style, MonitorHelper.MonitorBounds monitor)
+        {
+            if (!WindowSurfacePolicy.IsEligible(style)) return null;
+            var rect = WindowTransfer.FromWorkspace(placement.rcNormalPosition, monitor, style);
+            return new WindowInfo
+            {
+                Handle = handle, Title = title, WasMinimized = true,
+                WasMaximized = (placement.flags & 2) != 0,
+                OriginalRect = new PhysicalWindowRect
+                {
+                    Left = rect.Left - monitor.Left, Right = rect.Right - monitor.Left,
+                    Top = rect.Top - monitor.Top, Bottom = rect.Bottom - monitor.Top
+                }
+            };
+        }
+
+        [DllImport("user32.dll")]
+        private static extern IntPtr MonitorFromWindow(IntPtr window, uint flags);
 
         public List<WindowInfo> EnumerateVisibleWindows()
         {

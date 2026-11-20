@@ -21,9 +21,9 @@ public class ThumbnailStackingTests
                 manager.SourceOrder = [new(2), new(3), new(1)];
                 var layouts = new List<WindowLayout>
                 {
-                    new() { Window = new() { Handle = new(1), OriginalRect = new RECT { Right = 900, Bottom = 600 } } },
-                    new() { Window = new() { Handle = new(2), OriginalRect = new RECT { Right = 800, Bottom = 600 } } },
-                    new() { Window = new() { Handle = new(3), OriginalRect = new RECT { Right = 700, Bottom = 600 } } }
+                    new() { Window = new() { Handle = new(1), OriginalRect = new PhysicalWindowRect { Right = 900, Bottom = 600 } } },
+                    new() { Window = new() { Handle = new(2), OriginalRect = new PhysicalWindowRect { Right = 800, Bottom = 600 } } },
+                    new() { Window = new() { Handle = new(3), OriginalRect = new PhysicalWindowRect { Right = 700, Bottom = 600 } } }
                 };
                 manager.RegisterThumbnails(layouts, new WindowAnimationManager(thumbs));
                 Assert.Equal(new IntPtr[] { new(1), new(3), new(2) }, registered);

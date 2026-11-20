@@ -1,7 +1,4 @@
 using System;
-using System.Windows.Controls;
-using System.Windows.Shapes;
-using static WindowScatter.Win32Interop;
 
 namespace WindowScatter
 {
@@ -9,22 +6,28 @@ namespace WindowScatter
     {
         public IntPtr Handle;
         public string Title = string.Empty;
-        public RECT OriginalRect;
+        public PhysicalWindowRect OriginalRect;
         public bool WasMaximized;
+        public bool WasMinimized;
         public WindowActivationTarget Identity;
     }
 
-    public class WindowThumb
+    // Opaque native identity: no ownership of or calls through the HWND.
+    internal readonly record struct WindowActivationTarget(IntPtr Handle, uint ThreadId, uint ProcessId);
+
+    // Integer physical pixels, relative to the owning display for discovered/layout windows.
+    internal struct PhysicalWindowRect
+    {
+        public int Left, Top, Right, Bottom;
+    }
+
+    // Animation coordinates remain physical doubles; WPF converts explicitly at its boundary.
+    public class WindowPreviewState
     {
         public IntPtr WindowHandle { get; set; }
-        public IntPtr ThumbnailHandle { get; set; }
         public bool WasMinimized { get; set; }
         internal bool WasMaximized { get; set; }
         internal WindowActivationTarget Identity { get; set; }
-        public Border ClickBorder { get; set; } = null!;
-        public Border HighlightBorder { get; set; } = null!;
-        public TextBlock TitleLabel { get; set; } = null!;
-
         public double StartX { get; set; }
         public double StartY { get; set; }
         public double StartWidth { get; set; }
