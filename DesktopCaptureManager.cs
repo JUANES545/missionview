@@ -13,7 +13,8 @@ namespace WindowScatter
         private readonly Image backgroundImage;
         private readonly Window owner;
         private IntPtr desktopThumbnail = IntPtr.Zero;
-        private DWM_THUMBNAIL_PROPERTIES desktopProps;
+        private IntPtr desktopSource = IntPtr.Zero;
+        private int generation;
 
         private RECT currentMonitorBounds;
 
@@ -21,14 +22,6 @@ namespace WindowScatter
         {
             this.backgroundImage = backgroundImage;
             this.owner = owner;
-
-            desktopProps = new DWM_THUMBNAIL_PROPERTIES
-            {
-                dwFlags = DWM_TNP_RECTDESTINATION | DWM_TNP_OPACITY | DWM_TNP_VISIBLE | DWM_TNP_SOURCECLIENTAREAONLY | DWM_TNP_RECTSOURCE,
-                fVisible = true,
-                opacity = 255,
-                fSourceClientAreaOnly = false
-            };
         }
 
         public void SetMonitorBounds(int left, int top, int width, int height)
@@ -36,8 +29,9 @@ namespace WindowScatter
             currentMonitorBounds = new RECT { Left = left, Top = top, Right = left + width, Bottom = top + height };
         }
 
-        public async Task<bool> CaptureDesktopAsync()
+        public async Task<bool> CaptureDesktopAsync(IntPtr sharedSource = default)
         {
+            int current = ++generation;
             var helper = new WindowInteropHelper(owner);
             IntPtr ownerHwnd = helper.Handle;
 
@@ -45,20 +39,26 @@ namespace WindowScatter
 
             if (desktopThumbnail != IntPtr.Zero)
             {
-                DwmUnregisterThumbnail(desktopThumbnail);
-                desktopThumbnail = IntPtr.Zero;
+                CleanupCore();
                 await Task.Delay(10);
+                if (current != generation) return false;
             }
 
-            IntPtr desktopHandle = GetDesktopWindowHandle();
+            IntPtr desktopHandle = sharedSource != IntPtr.Zero ? sharedSource : GetDesktopWindowHandle();
             if (desktopHandle == IntPtr.Zero) return false;
 
             int result = DwmRegisterThumbnail(ownerHwnd, desktopHandle, out desktopThumbnail);
             if (result != 0 || desktopThumbnail == IntPtr.Zero) return false;
 
-            UpdateDesktopThumbnail();
+            desktopSource = desktopHandle;
+            if (!UpdateDesktopThumbnail())
+            {
+                Cleanup();
+                return false;
+            }
             DwmFlush();
             await Task.Delay(50);
+            if (current != generation) return false;
 
             SIZE sourceSize;
             int sizeResult = DwmQueryThumbnailSourceSize(desktopThumbnail, out sourceSize);
@@ -71,35 +71,38 @@ namespace WindowScatter
             return true;
         }
 
-        public void UpdateDesktopThumbnail(byte opacity = 255)
+        public bool UpdateDesktopThumbnail(byte opacity = 255)
         {
-            if (desktopThumbnail == IntPtr.Zero) return;
+            if (desktopThumbnail == IntPtr.Zero || desktopSource == IntPtr.Zero) return false;
 
-            // DWM thumbnail rects are physical pixels, not WPF DIPs: using
-            // owner.ActualWidth/Height here stretched the background whenever the
-            // monitor scale was anything but 100% (#10).
-            desktopProps.rcDestination.Left = 0;
-            desktopProps.rcDestination.Top = 0;
-            desktopProps.rcDestination.Right = currentMonitorBounds.Right - currentMonitorBounds.Left;
-            desktopProps.rcDestination.Bottom = currentMonitorBounds.Bottom - currentMonitorBounds.Top;
+            if (!GetWindowRect(desktopSource, out RECT sourceBounds))
+            {
+                System.Diagnostics.Trace.TraceError($"GetWindowRect for desktop source failed: {Marshal.GetLastWin32Error()}");
+                return false;
+            }
 
-            desktopProps.rcSource = currentMonitorBounds;
-            desktopProps.opacity = opacity;
-            desktopProps.dwFlags = DWM_TNP_RECTDESTINATION | DWM_TNP_OPACITY | DWM_TNP_VISIBLE | DWM_TNP_RECTSOURCE;
-
-            DwmUpdateThumbnailProperties(desktopThumbnail, ref desktopProps);
+            // Both rectangles are physical pixels; rcSource is local to WorkerW/Progman.
+            return DesktopThumbnail.TryUpdate(desktopThumbnail, currentMonitorBounds, sourceBounds,
+                opacity, DwmUpdateThumbnailProperties);
         }
 
         public void Cleanup()
+        {
+            generation++;
+            CleanupCore();
+        }
+
+        private void CleanupCore()
         {
             if (desktopThumbnail != IntPtr.Zero)
             {
                 DwmUnregisterThumbnail(desktopThumbnail);
                 desktopThumbnail = IntPtr.Zero;
             }
+            desktopSource = IntPtr.Zero;
         }
 
-        private IntPtr GetDesktopWindowHandle()
+        public static IntPtr GetDesktopWindowHandle()
         {
             IntPtr workerW = IntPtr.Zero;
             IntPtr progman = FindWindow("Progman", null);

@@ -6,133 +6,154 @@ namespace WindowScatter
 {
     internal class WindowLayoutCalculator
     {
-        // A little overlap is preferable to losing the user's spatial context.
-        // Measured against the smaller thumbnail so small windows stay visible.
-        private const double MaxOverlapFraction = 0.05;
+        internal const double SideInset = 14;
+        internal const double BottomInset = 36;
+        internal const double ToolbarHeight = 64;
 
-        public List<WindowLayout> CalculateLayouts(List<WindowInfo> windows, double screenW, double screenH)
+        public List<WindowLayout> CalculateLayouts(List<WindowInfo> windows, double screenW, double screenH,
+            double dpiScale = 1)
         {
-            if (!double.IsFinite(screenW) || !double.IsFinite(screenH) || screenW <= 0 || screenH <= 0)
-                throw new ArgumentOutOfRangeException(nameof(screenW), "Screen dimensions must be finite and positive.");
-            if (windows.Count == 0) return new List<WindowLayout>();
+            if (!double.IsFinite(screenW + screenH + dpiScale) || screenW <= 0 || screenH <= 0 || dpiScale <= 0)
+                throw new ArgumentOutOfRangeException(nameof(screenW), "Screen dimensions and DPI must be finite and positive.");
+            if (windows.Count == 0) return new();
             if (windows.Any(w => Width(w) <= 0 || Height(w) <= 0))
                 throw new ArgumentException("Window dimensions must be positive.", nameof(windows));
 
-            double padding = Math.Min(50, Math.Min(screenW, screenH) * 0.05);
-            double availableW = screenW - 2 * padding;
-            double availableH = screenH - 2 * padding;
+            double padding = Math.Min(16 * dpiScale, Math.Min(screenW, screenH) * .025);
+            double side = SideInset * dpiScale + 1;
+            double bottom = BottomInset * dpiScale + 1;
+            double left = padding + side, top = ToolbarHeight * dpiScale + side;
+            double availableW = screenW - padding - side - left;
+            double availableH = screenH - padding - bottom - top;
+            // Compact rows supply only a feasible fallback and lower retry bound.
+            var ordered = SpatialOrder(windows);
+            double bestScale = 0, bestShape = double.PositiveInfinity;
+            int bestColumns = 0;
+            for (int columns = 1; columns <= ordered.Count; columns++)
+            {
+                var rows = ordered.Chunk(columns).ToArray();
+                double height = rows.Sum(row => row.Max(Height));
+                double scale = Math.Min(.5, (availableH - (rows.Length - 1) * (side + bottom)) / height);
+                foreach (var row in rows)
+                    scale = Math.Min(scale, (availableW - (row.Length - 1) * 2 * side) / row.Sum(Width));
+                if (scale <= 0) continue;
+                double groupW = rows.Max(row => row.Sum(Width) * scale + (row.Length - 1) * 2 * side);
+                double groupH = height * scale + (rows.Length - 1) * (side + bottom);
+                double shape = Math.Abs(Math.Log(groupW / groupH / (availableW / availableH)));
+                if (scale > bestScale + 1e-10 || (Math.Abs(scale - bestScale) <= 1e-10 && shape < bestShape))
+                {
+                    bestScale = scale;
+                    bestShape = shape;
+                    bestColumns = columns;
+                }
+            }
+            if (bestColumns == 0)
+                throw new InvalidOperationException("The monitor cannot fit the overview controls and window labels.");
 
-            // Never use enumeration/Z-order as a tie-breaker: activating a window
-            // changes Z-order even when none of the desktop geometry has changed.
-            var ordered = windows.OrderByDescending(w => Width(w) * Height(w))
+            var searchOrder = windows.OrderByDescending(w => Width(w) * Height(w))
                 .ThenBy(w => w.OriginalRect.Left + Width(w) / 2)
                 .ThenBy(w => w.OriginalRect.Top + Height(w) / 2)
                 .ThenBy(w => w.Handle.ToInt64()).ToList();
-            double area = ordered.Sum(w => Width(w) * Height(w));
-            double scale = Math.Min(0.5, Math.Sqrt(availableW * availableH * 0.65 / area));
-            scale = Math.Min(scale, ordered.Min(w => Math.Min(availableW / Width(w), availableH / Height(w))));
-
-            // Retry the WHOLE arrangement at a common scale; never resize a single
-            // thumbnail or swap windows into slots made for different dimensions.
-            // The final scale also fits every window in one row, guaranteeing a
-            // feasible arrangement without an overlapping-center fallback.
-            double rowScale = Math.Min(scale, availableW / ordered.Sum(Width));
+            double searchScale = Math.Min(.5,
+                windows.Min(w => Math.Min(availableW / Width(w), availableH / Height(w))));
             while (true)
             {
-                var layouts = TryPlace(ordered, scale, padding, screenW, screenH);
-                if (layouts != null) return layouts;
-                // Greedy placement is not a complete packing solver. At the
-                // guaranteed row-fit scale, use a spatially ordered row rather
-                // than retrying the same unsuccessful arrangement forever.
-                if (scale <= rowScale)
-                    return PlaceRow(ordered, rowScale, padding, screenW, screenH);
-                scale = Math.Max(rowScale, scale * 0.9);
+                var placed = TryPlace(searchOrder, searchScale, left, top, availableW, availableH, side, bottom);
+                if (placed != null) return placed;
+                // Greedy search is incomplete; the compact row fit bounds retries.
+                if (searchScale <= bestScale)
+                    return PlaceGrid(ordered, bestScale, bestColumns, left, top, availableW, availableH, dpiScale);
+                searchScale = Math.Max(bestScale, searchScale * .9);
             }
         }
 
         private static double Width(WindowInfo w) => (double)w.OriginalRect.Right - w.OriginalRect.Left;
         private static double Height(WindowInfo w) => (double)w.OriginalRect.Bottom - w.OriginalRect.Top;
-
-        private static List<WindowLayout> PlaceRow(List<WindowInfo> windows, double scale,
-            double padding, double screenW, double screenH)
-        {
-            double x = (screenW - windows.Sum(Width) * scale) / 2;
-            var result = new List<WindowLayout>();
-            foreach (var w in windows.OrderBy(w => w.OriginalRect.Left + Width(w) / 2)
-                .ThenBy(w => w.OriginalRect.Top + Height(w) / 2).ThenBy(w => w.Handle.ToInt64()))
-            {
-                double height = Height(w) * scale;
-                result.Add(new WindowLayout
-                {
-                    Window = w, OrigWidth = Width(w), OrigHeight = Height(w),
-                    Width = Width(w) * scale, Height = height, X = x,
-                    Y = Math.Clamp(w.OriginalRect.Top + Height(w) / 2 - height / 2,
-                        padding, Math.Max(padding, screenH - padding - height))
-                });
-                x += Width(w) * scale;
-            }
-            return result;
-        }
+        private static List<WindowInfo> SpatialOrder(List<WindowInfo> windows) => windows
+            .OrderBy(w => w.OriginalRect.Top + Height(w) / 2)
+            .ThenBy(w => w.OriginalRect.Left + Width(w) / 2)
+            .ThenBy(w => w.Handle.ToInt64()).ToList();
 
         private static List<WindowLayout>? TryPlace(List<WindowInfo> windows, double scale,
-            double padding, double screenW, double screenH)
+            double left, double top, double availableW, double availableH, double side, double bottom)
         {
-            var placed = new List<WindowLayout>();
-            foreach (var window in windows)
+            var anchors = windows.Select(w => new WindowLayout
             {
-                var layout = new WindowLayout
-                {
-                    Window = window, OrigWidth = Width(window), OrigHeight = Height(window),
-                    Width = Width(window) * scale, Height = Height(window) * scale
-                };
-                // A window fitted exactly to the available dimension can put
-                // the computed upper bound a few ULPs below padding.
-                double maxX = Math.Max(padding, screenW - padding - layout.Width);
-                double maxY = Math.Max(padding, screenH - padding - layout.Height);
-                double anchorX = Math.Clamp(window.OriginalRect.Left + layout.OrigWidth / 2 - layout.Width / 2, padding, maxX);
-                double anchorY = Math.Clamp(window.OriginalRect.Top + layout.OrigHeight / 2 - layout.Height / 2, padding, maxY);
-                var xs = new List<double> { anchorX, padding, maxX };
-                var ys = new List<double> { anchorY, padding, maxY };
+                Window = w, OrigWidth = Width(w), OrigHeight = Height(w),
+                Width = Width(w) * scale, Height = Height(w) * scale,
+                X = Math.Clamp(w.OriginalRect.Left + Width(w) * (1 - scale) / 2,
+                    left, Math.Max(left, left + availableW - Width(w) * scale)),
+                Y = Math.Clamp(w.OriginalRect.Top + Height(w) * (1 - scale) / 2,
+                    top, Math.Max(top, top + availableH - Height(w) * scale))
+            }).ToList();
+            // Reserve independent anchors before moving colliding windows into free slots.
+            var placed = anchors.Where(a => anchors.All(b => ReferenceEquals(a, b) ||
+                !Overlaps(a.X, a.Y, a, b, side, bottom))).ToList();
+            foreach (var layout in anchors)
+            {
+                if (placed.Contains(layout)) continue;
+                double anchorX = layout.X, anchorY = layout.Y;
+                double maxX = Math.Max(left, left + availableW - layout.Width);
+                double maxY = Math.Max(top, top + availableH - layout.Height);
+                var xs = new List<double> { anchorX, left, maxX };
+                var ys = new List<double> { anchorY, top, maxY };
                 foreach (var other in placed)
                 {
-                    double allowedArea = MaxOverlapFraction * Math.Min(layout.Width * layout.Height, other.Width * other.Height);
-                    double overlapX = allowedArea / Math.Min(layout.Height, other.Height);
-                    double overlapY = allowedArea / Math.Min(layout.Width, other.Width);
-                    xs.AddRange(new[] { other.X - layout.Width, other.X + other.Width,
-                        other.X - layout.Width + overlapX, other.X + other.Width - overlapX });
-                    ys.AddRange(new[] { other.Y - layout.Height, other.Y + other.Height,
-                        other.Y - layout.Height + overlapY, other.Y + other.Height - overlapY });
+                    xs.AddRange(new[] { other.X - layout.Width - 2 * side, other.X + other.Width + 2 * side });
+                    ys.AddRange(new[] { other.Y - layout.Height - side - bottom, other.Y + other.Height + side + bottom });
                 }
-
                 double bestDistance = double.PositiveInfinity;
                 bool found = false;
-                // Include obstacle edges as candidates, rather than a coarse grid
-                // that can miss narrow free spaces. Sorted ties are deterministic.
-                var candidateXs = xs.Select(x => Math.Clamp(x, padding, maxX)).Distinct().OrderBy(x => x).ToArray();
-                var candidateYs = ys.Select(y => Math.Clamp(y, padding, maxY)).Distinct().OrderBy(y => y).ToArray();
+                var candidateXs = xs.Select(x => Math.Clamp(x, left, maxX)).Distinct().OrderBy(x => x).ToArray();
+                var candidateYs = ys.Select(y => Math.Clamp(y, top, maxY)).Distinct().OrderBy(y => y).ToArray();
                 foreach (double x in candidateXs)
                 foreach (double y in candidateYs)
                 {
                     double distance = (x - anchorX) * (x - anchorX) + (y - anchorY) * (y - anchorY);
-                    if (distance >= bestDistance) continue;
-                    if (placed.Any(other => OverlapsTooMuch(x, y, layout, other))) continue;
+                    if (distance >= bestDistance || placed.Any(o => Overlaps(x, y, layout, o, side, bottom))) continue;
                     bestDistance = distance;
-                    layout.X = x;
-                    layout.Y = y;
+                    layout.X = x; layout.Y = y;
                     found = true;
                 }
                 if (!found) return null;
                 placed.Add(layout);
             }
-            return placed;
+            return anchors;
         }
 
-        private static bool OverlapsTooMuch(double x, double y, WindowLayout layout, WindowLayout other)
+        private static bool Overlaps(double x, double y, WindowLayout layout, WindowLayout other, double side, double bottom)
+            => x < other.X + other.Width + 2 * side - 1e-7 &&
+               x + layout.Width + 2 * side > other.X + 1e-7 &&
+               y < other.Y + other.Height + side + bottom - 1e-7 &&
+               y + layout.Height + side + bottom > other.Y + 1e-7;
+
+        internal static List<WindowLayout> PlaceGrid(List<WindowInfo> windows, double scale, int columns,
+            double left, double top, double availableW, double availableH, double dpiScale = 1)
         {
-            double w = Math.Max(0, Math.Min(x + layout.Width, other.X + other.Width) - Math.Max(x, other.X));
-            double h = Math.Max(0, Math.Min(y + layout.Height, other.Y + other.Height) - Math.Max(y, other.Y));
-            double smallerArea = Math.Min(layout.Width * layout.Height, other.Width * other.Height);
-            return w * h > smallerArea * MaxOverlapFraction + 1e-7;
+            double horizontalGap = 2 * (SideInset * dpiScale + 1);
+            double verticalGap = (SideInset + BottomInset) * dpiScale + 2;
+            var rows = SpatialOrder(windows).Chunk(columns).ToArray();
+            double groupH = rows.Sum(row => row.Max(Height) * scale) + (rows.Length - 1) * verticalGap;
+            double y = top + (availableH - groupH) / 2;
+            var result = new List<WindowLayout>();
+            foreach (var row in rows)
+            {
+                double rowH = row.Max(Height) * scale;
+                double rowW = row.Sum(Width) * scale + (row.Length - 1) * horizontalGap;
+                double x = left + (availableW - rowW) / 2;
+                foreach (var w in row.OrderBy(w => w.OriginalRect.Left + Width(w) / 2).ThenBy(w => w.Handle.ToInt64()))
+                {
+                    result.Add(new WindowLayout
+                    {
+                        Window = w, OrigWidth = Width(w), OrigHeight = Height(w),
+                        Width = Width(w) * scale, Height = Height(w) * scale,
+                        X = x, Y = y + (rowH - Height(w) * scale) / 2
+                    });
+                    x += Width(w) * scale + horizontalGap;
+                }
+                y += rowH + verticalGap;
+            }
+            return result;
         }
     }
 }

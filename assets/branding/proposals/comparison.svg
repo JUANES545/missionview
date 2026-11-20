@@ -1,0 +1,79 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="600" viewBox="0 0 960 600" role="img" aria-labelledby="title desc">
+  <title id="title">MissionView logo proposals</title>
+  <desc id="desc">Three panes, Spread and Focus at 72 pixels and at actual 16, 20 and 24 pixel sizes on light and dark surfaces. All designs also appear in monochrome. No logo has been approved.</desc>
+  <defs>
+    <symbol id="panes" viewBox="0 0 24 24">
+      <rect x="2" y="3" width="8" height="18" rx="1" fill="currentColor"/>
+      <rect x="13" y="3" width="9" height="7" rx="1" fill="currentColor"/>
+      <rect x="13" y="13" width="9" height="8" rx="1" fill="currentColor"/>
+    </symbol>
+    <symbol id="spread" viewBox="0 0 24 24">
+      <g fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round">
+        <path d="M7 10H2V22H14V19"/>
+        <path d="M11 6H6V18H18V15"/>
+        <rect x="10" y="2" width="12" height="12" rx="1"/>
+      </g>
+    </symbol>
+    <symbol id="focus" viewBox="0 0 24 24">
+      <path d="M22 7V2H2V22H7" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
+      <rect x="10" y="10" width="12" height="12" rx="1" fill="currentColor"/>
+    </symbol>
+  </defs>
+  <rect width="960" height="600" fill="#F5F6F5"/>
+  <g font-family="Segoe UI, sans-serif" fill="#202522">
+    <text x="40" y="48" font-size="28" font-weight="600">MissionView</text>
+    <text x="40" y="78" font-size="16">Three logo directions. Proposals only.</text>
+    <g font-size="20" font-weight="600">
+      <text x="40" y="128">Three panes</text>
+      <text x="360" y="128">Spread</text>
+      <text x="680" y="128">Focus</text>
+    </g>
+    <g font-size="14">
+      <text x="40" y="154">Separate, unequal windows</text>
+      <text x="360" y="154">Frames opening outward</text>
+      <text x="680" y="154">One window in focus</text>
+    </g>
+  </g>
+  <g color="#247A45">
+    <use href="#panes" x="40" y="180" width="72" height="72"/>
+    <use href="#spread" x="360" y="180" width="72" height="72"/>
+    <use href="#focus" x="680" y="180" width="72" height="72"/>
+    <use href="#panes" x="40" y="288" width="16" height="16"/>
+    <use href="#panes" x="88" y="284" width="20" height="20"/>
+    <use href="#panes" x="140" y="280" width="24" height="24"/>
+    <use href="#spread" x="360" y="288" width="16" height="16"/>
+    <use href="#spread" x="408" y="284" width="20" height="20"/>
+    <use href="#spread" x="460" y="280" width="24" height="24"/>
+    <use href="#focus" x="680" y="288" width="16" height="16"/>
+    <use href="#focus" x="728" y="284" width="20" height="20"/>
+    <use href="#focus" x="780" y="280" width="24" height="24"/>
+  </g>
+  <g font-family="Segoe UI, sans-serif" font-size="13" fill="#46514A">
+    <text x="40" y="328">16</text><text x="88" y="328">20</text><text x="140" y="328">24 px</text>
+    <text x="360" y="328">16</text><text x="408" y="328">20</text><text x="460" y="328">24 px</text>
+    <text x="680" y="328">16</text><text x="728" y="328">20</text><text x="780" y="328">24 px</text>
+  </g>
+  <rect y="352" width="960" height="136" fill="#202522"/>
+  <g font-family="Segoe UI, sans-serif" font-size="14" fill="#F5F6F5">
+    <text x="40" y="382">Dark surface, 16 / 20 / 24 px</text>
+  </g>
+  <g color="#7DDB9B">
+    <use href="#panes" x="40" y="420" width="16" height="16"/>
+    <use href="#panes" x="88" y="416" width="20" height="20"/>
+    <use href="#panes" x="140" y="412" width="24" height="24"/>
+    <use href="#spread" x="360" y="420" width="16" height="16"/>
+    <use href="#spread" x="408" y="416" width="20" height="20"/>
+    <use href="#spread" x="460" y="412" width="24" height="24"/>
+    <use href="#focus" x="680" y="420" width="16" height="16"/>
+    <use href="#focus" x="728" y="416" width="20" height="20"/>
+    <use href="#focus" x="780" y="412" width="24" height="24"/>
+  </g>
+  <g font-family="Segoe UI, sans-serif" font-size="14" fill="#202522">
+    <text x="40" y="520">Monochrome, 24 px</text>
+  </g>
+  <g color="#202522">
+    <use href="#panes" x="40" y="544" width="24" height="24"/>
+    <use href="#spread" x="360" y="544" width="24" height="24"/>
+    <use href="#focus" x="680" y="544" width="24" height="24"/>
+  </g>
+</svg>
