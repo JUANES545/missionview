@@ -8,7 +8,9 @@ See your open windows together and choose where to go next.
 
 ## Download and installation
 
-The MissionView installer is not available yet. We will add the download and installation steps here when the first release is ready.
+Download the MissionView Setup executable from [Releases](https://github.com/JUANES545/missionview/releases). Run Setup, choose an installation folder, then open MissionView from the Start menu. Use its system tray icon to access the controls.
+
+Requires Windows 11 x64, version 24H2 (build 26100) or later. The download includes the .NET runtime; you do not need to install .NET or a developer SDK.
 
 ## Using MissionView
 
