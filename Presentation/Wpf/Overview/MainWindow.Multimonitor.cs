@@ -156,7 +156,7 @@ namespace WindowScatter
         private void ConfigureThumbnailInput(WindowThumb thumb)
         {
             var border = thumb.ClickBorder;
-            AutomationProperties.SetName(border, thumb.TitleLabel.Text);
+            ConfigureThumbnailAutomation(thumb);
             border.MouseLeftButtonDown += (_, e) =>
             {
                 if (!scatterInteraction.IsOpen || AnyAnimating || isScatterActive || isTransitioning || coordinator.movingWindow) return;

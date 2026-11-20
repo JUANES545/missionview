@@ -23,8 +23,9 @@ public sealed class SettingsWindowTests
                 Assert.Null(UIElementAutomationPeer.CreatePeerForElement(Descendants(window).OfType<Image>().Single()));
                 var controls = Descendants(window).OfType<Control>().ToArray();
                 Assert.Single(controls.OfType<ComboBox>());
-                Assert.Equal(new[] { "Overview shortcut", "Corner", "Delay (milliseconds)" },
-                    controls.Where(c => !string.IsNullOrEmpty(AutomationProperties.GetName(c))).Select(AutomationProperties.GetName));
+                Assert.Equal(new[] { "Overview shortcut: Win+F12", "App Exposé shortcut: Win+Shift+F12", "Corner", "Delay (milliseconds)" },
+                    controls.Where(c => !string.IsNullOrEmpty(AutomationProperties.GetName(c)) &&
+                        !AutomationProperties.GetAutomationId(c).EndsWith(" help")).Select(AutomationProperties.GetName));
                 Assert.Equal("Win+F12", Button(window, "Win+F12").Content);
                 Assert.False(controls.OfType<ComboBox>().Single().IsEnabled);
                 TextBox(window, "Delay (milliseconds)").Text = "250";
@@ -108,9 +109,10 @@ public sealed class SettingsWindowTests
                 window.RecordShortcut(Key.F9, ModifierKeys.Control | ModifierKeys.Alt);
                 Assert.False(window.IsRecordingShortcut);
                 Assert.Equal("Ctrl+Alt+F9", button.Content);
-                var hint = Descendants(window).OfType<TextBlock>().Single(text => text.Text.StartsWith("App Exposé"));
-                Assert.Contains("Ctrl+Alt+F9", hint.Text);
-                Assert.DoesNotContain("Win+F12", hint.Text);
+                var hint = Descendants(window).OfType<TextBlock>().Single(text => AutomationProperties.GetLiveSetting(text) == AutomationLiveSetting.Polite);
+                Assert.Contains("Save", hint.Text);
+                Assert.Equal("Ctrl+Alt+Shift+F9", Descendants(window).OfType<Button>()
+                    .Single(b => AutomationProperties.GetAutomationId(b) == "App Exposé shortcut").Content);
                 Button(window, "Save").RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
                 Assert.Equal("Ctrl+Alt+F9", saved?.Hotkey);
             }
@@ -129,11 +131,12 @@ public sealed class SettingsWindowTests
                 window.RecordShortcut(Key.F12, ModifierKeys.Windows | ModifierKeys.Shift);
                 Assert.False(window.IsRecordingShortcut);
                 Assert.Equal("Win+Shift+F12", button.Content);
-                var hint = Descendants(window).OfType<TextBlock>().Single(text => text.Text.StartsWith("App Exposé"));
+                var hint = Descendants(window).OfType<TextBlock>().Single(text => AutomationProperties.GetLiveSetting(text) == AutomationLiveSetting.Polite);
                 Assert.Contains("unavailable", hint.Text);
                 button.RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
                 window.RecordShortcut(Key.F9, ModifierKeys.Control);
-                Assert.Contains("Ctrl+F9", hint.Text);
+                Assert.Equal("Ctrl+Shift+F9", Descendants(window).OfType<Button>()
+                    .Single(b => AutomationProperties.GetAutomationId(b) == "App Exposé shortcut").Content);
                 Assert.DoesNotContain("unavailable", hint.Text);
             }
             finally { window.Close(); }
@@ -204,19 +207,20 @@ public sealed class SettingsWindowTests
             }, new TextBlock(), () => hotkeys.AppExpose != null);
             try
             {
-                var hint = Descendants(window).OfType<TextBlock>().Single(text => text.Text.StartsWith("App Exposé"));
+                var hint = Descendants(window).OfType<TextBlock>().Single(text => AutomationProperties.GetLiveSetting(text) == AutomationLiveSetting.Polite);
                 Assert.Contains("unavailable", hint.Text);
                 Assert.Contains("reserve", hint.Text);
                 Button(window, "Win+W").RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
                 window.RecordShortcut(Key.F9, ModifierKeys.Control | ModifierKeys.Alt);
-                Assert.Contains("requested", hint.Text);
+                Assert.Contains("Follows Overview", hint.Text);
                 Assert.Contains("Save", hint.Text);
                 Assert.DoesNotContain("hold Shift", hint.Text);
                 allowReservation = true;
                 Button(window, "Save").RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
                 Assert.NotNull(hotkeys.AppExpose);
-                Assert.Contains("hold Shift with Ctrl+Alt+F9", hint.Text);
-                Assert.DoesNotContain("requested", hint.Text);
+                Assert.Equal("Follows Overview", hint.Text);
+                Assert.Equal("Ctrl+Alt+Shift+F9", Descendants(window).OfType<Button>()
+                    .Single(b => AutomationProperties.GetAutomationId(b) == "App Exposé shortcut").Content);
             }
             finally { window.Close(); }
         });

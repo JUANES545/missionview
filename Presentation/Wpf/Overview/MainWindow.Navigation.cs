@@ -137,7 +137,9 @@ namespace WindowScatter
         private void SelectWindow(IntPtr windowHandle, bool keyboard = false, bool revealMinimized = false)
         {
             if (!IsCoordinator) { coordinator.SelectWindow(windowHandle, keyboard, revealMinimized); return; }
-            if (!session.Select(windowHandle))
+            bool changed = session.Select(windowHandle);
+            foreach (var view in views) view.thumbnailManager?.SetAutomationSelection(windowHandle);
+            if (!changed)
             {
                 foreach (var view in views)
                     view.minimizedStrip?.SetSelected(windowHandle, reveal: revealMinimized && view == activeView, keyboardFocus: keyboard);
@@ -154,6 +156,20 @@ namespace WindowScatter
                     ? IntPtr.Zero : windowHandle);
             }
             if (previewKey.IsHeld && !navigationPending) activeView.ExpandPreview();
+        }
+
+        private void ConfigureThumbnailAutomation(WindowThumb thumb)
+        {
+            var target = (OverviewThumbnail)thumb.ClickBorder;
+            int generation = scatterInteraction.Generation;
+            target.ConfigureAutomation(
+                () => scatterInteraction.IsOpen && generation == scatterInteraction.Generation &&
+                    !isClosing && !isScatterActive && !AnyAnimating && !isTransitioning &&
+                    !coordinator.movingWindow && !coordinator.navigationPending && !coordinator.drag.IsPressed &&
+                    windowThumbs.Contains(thumb),
+                selected => coordinator.SelectWindow(selected ? thumb.WindowHandle : IntPtr.Zero),
+                () => OnWindowClicked(thumb.WindowHandle));
+            target.SetSelected(thumb.WindowHandle == selectedWindowHandle);
         }
 
         private void ExpandPreview()

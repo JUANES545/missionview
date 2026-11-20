@@ -73,6 +73,10 @@ flowchart LR
 
 Open **Settings...** from the system tray to record an overview shortcut, enable or disable hot corners, choose a corner and delay, or change **Start with Windows**. Changes take effect when you choose **Save**. If a shortcut conflicts or Windows cannot save or apply a preference, MissionView reports the error and attempts to restore the previous preferences. It also reports restoration failures.
 
+Settings groups these controls under **General**, **Shortcuts**, **Hot corners**, and **Updates & About**. Start with Windows is in General; the tray keeps the main actions and running version. Narrow windows stack preference rows, with scrolling available when space is limited.
+
+Record App Exposé separately in **Shortcuts** to use an independent key combination. It must include Ctrl, Alt or Win and differ from the overview shortcut. Existing profiles keep the inherited Shift shortcut until you change it. Both shortcuts are checked and applied together on Save.
+
 Preferences live in `%LOCALAPPDATA%\MissionView\settings.json`. MissionView preserves an existing profile and migrates a legacy `settings.json` beside the executable only when the user profile does not exist. Renderer and animation values remain in the file; Settings does not expose controls for them.
 
 Choose **Check for updates...** in the tray or Settings to check manually; MissionView does not poll for updates. Both controls share the same update operation. You can download an available update and follow its progress while MissionView checks the release origin and installer hash. Before starting Setup, MissionView asks you to save or discard pending settings and confirm installation. The confirmation explains the limits of publisher and Windows-version verification; Windows may still show publisher, SmartScreen or UAC warnings. MissionView closes only after Setup starts.
@@ -135,7 +139,7 @@ dotnet test .\tests\MissionView.UpdateTests -c Release
 dotnet build .\WindowScatter.csproj -c Release
 ```
 
-The remaining native fixtures create their own off-screen windows. They do not establish physical acceptance, screen-reader compatibility or installed-update behavior. The minimized shelf exposes real SelectionItem/Invoke state; the previously documented missing normal-thumbnail automation peer and 80-character normal title limit remain open issues.
+The remaining native fixtures create their own off-screen windows. They do not establish physical acceptance, screen-reader compatibility or installed-update behavior. Normal thumbnails expose their full window titles through UI Automation, while visual labels retain the 80-character limit. Their Invoke action uses the existing activation path, and SelectionItem state follows overview selection across normal and minimized windows. Each display's normal-thumbnail list exposes the current selection; the minimized shelf retains its own SelectionItem/Invoke state.
 
 </details>
 

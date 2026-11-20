@@ -5,6 +5,7 @@ namespace WindowScatter
     public class AppSettings
     {
         public string Hotkey { get; set; } = "Win+W";
+        public string? AppExposeHotkey { get; set; }
         public bool EnableHotCorners { get; set; } = true;
         public string HotCornerPosition { get; set; } = "TopLeft";
         public int HotCornerDelay { get; set; } = 500;
@@ -18,8 +19,8 @@ namespace WindowScatter
 
         internal void Validate()
         {
-            if (string.IsNullOrWhiteSpace(Hotkey) || HotkeyParser.Parse(Hotkey).VirtualKeyCode == 0)
-                throw new InvalidDataException("Settings contain an unsupported hotkey.");
+            if (!OverviewShortcutPair.TryParse(Hotkey, AppExposeHotkey, out _, out var shortcutError))
+                throw new InvalidDataException(shortcutError);
             if (HotCornerPosition == null || !new[] { "TopLeft", "TopRight", "BottomLeft", "BottomRight" }
                 .Contains(HotCornerPosition, StringComparer.OrdinalIgnoreCase))
                 throw new InvalidDataException("Settings contain an unsupported hot corner.");
@@ -34,6 +35,7 @@ namespace WindowScatter
         internal void CopyFrom(AppSettings source)
         {
             Hotkey = source.Hotkey;
+            AppExposeHotkey = source.AppExposeHotkey;
             EnableHotCorners = source.EnableHotCorners;
             HotCornerPosition = source.HotCornerPosition;
             HotCornerDelay = source.HotCornerDelay;
