@@ -448,6 +448,8 @@ namespace WindowScatter
         {
             if (e.PropertyName == nameof(SystemParameters.ClientAreaAnimation))
                 animationManager?.SetMotionEnabled(SystemParameters.ClientAreaAnimation);
+            if (e.PropertyName is nameof(SystemParameters.HighContrast) or nameof(SystemParameters.ClientAreaAnimation))
+                thumbnailManager?.ApplyPalette(SystemParameters.HighContrast, SystemParameters.ClientAreaAnimation);
         }
 
         #endregion

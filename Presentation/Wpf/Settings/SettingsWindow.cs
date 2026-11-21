@@ -50,8 +50,8 @@ internal sealed class SettingsWindow : Window
         MinHeight = Math.Min(300, MaxHeight);
         WindowStartupLocation = WindowStartupLocation.CenterScreen;
         Background = SystemParameters.HighContrast ? SystemColors.WindowBrush : SharedBrushes.Graphite;
-        Foreground = SystemParameters.HighContrast ? SystemColors.WindowTextBrush : Brush("#F3F5F4");
-        FontFamily = new FontFamily("Segoe UI");
+        Foreground = SystemParameters.HighContrast ? SystemColors.WindowTextBrush : SharedBrushes.Text;
+        FontFamily = new FontFamily("Segoe UI Variable, Segoe UI");
         FontSize = 14;
         hotCorners.Foreground = startup.Foreground = Foreground;
         UseLayoutRounding = true;
@@ -62,6 +62,17 @@ internal sealed class SettingsWindow : Window
         DockPanel.SetDock(footer, Dock.Bottom);
         root.Children.Add(footer);
         AutomationProperties.SetLiveSetting(feedback, AutomationLiveSetting.Assertive);
+        var feedbackStyle = new Style(typeof(TextBlock));
+        feedbackStyle.Setters.Add(new Setter(TextBlock.ForegroundProperty, new DynamicResourceExtension("FieldForeground")));
+        feedbackStyle.Setters.Add(new Setter(TextBlock.PaddingProperty, new Thickness(12, 8, 12, 8)));
+        feedbackStyle.Setters.Add(new Setter(TextBlock.BackgroundProperty, new DynamicResourceExtension("PreferenceSurface")));
+        var errorFeedback = new Trigger { Property = TagProperty, Value = "Error" };
+        errorFeedback.Setters.Add(new Setter(TextBlock.ForegroundProperty, new DynamicResourceExtension("FieldError")));
+        feedbackStyle.Triggers.Add(errorFeedback);
+        var noFeedback = new Trigger { Property = TextBlock.TextProperty, Value = "" };
+        noFeedback.Setters.Add(new Setter(VisibilityProperty, Visibility.Collapsed));
+        feedbackStyle.Triggers.Add(noFeedback);
+        feedback.Style = feedbackStyle;
         footer.Children.Add(new ScrollViewer { Content = feedback, MaxHeight = 84,
             VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled });
         var actions = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
@@ -76,7 +87,7 @@ internal sealed class SettingsWindow : Window
         save.Margin = new Thickness(8, 8, 0, 0);
         if (!SystemParameters.HighContrast)
         {
-            save.Background = Brush("#7DDB9B");
+            save.Background = SharedBrushes.Mint;
             save.Foreground = SharedBrushes.Graphite;
         }
         cancel.Margin = new Thickness(0, 8, 0, 0);
@@ -142,6 +153,7 @@ internal sealed class SettingsWindow : Window
                 IsRecordingShortcut = true;
                 recorder.Content = "Recording...";
                 recorder.Tag = "Cancel";
+                feedback.Tag = null;
                 feedback.Text = "Use Ctrl, Alt or Win with a key. Escape cancels recording.";
                 RefreshRecorderNames();
             };
@@ -223,13 +235,13 @@ internal sealed class SettingsWindow : Window
         Dispatcher.Invoke(() =>
         {
             Background = SystemParameters.HighContrast ? SystemColors.WindowBrush : SharedBrushes.Graphite;
-            Foreground = SystemParameters.HighContrast ? SystemColors.WindowTextBrush : Brush("#F3F5F4");
+            Foreground = SystemParameters.HighContrast ? SystemColors.WindowTextBrush : SharedBrushes.Text;
             hotCorners.Foreground = startup.Foreground = Foreground;
             categories.Background = Background;
             categories.Foreground = Foreground;
             foreach (var row in preferenceRows)
                 ((Label)row.Children[0]).Foreground = Foreground;
-            saveButton.Background = SystemParameters.HighContrast ? SystemColors.ControlBrush : Brush("#7DDB9B");
+            saveButton.Background = SystemParameters.HighContrast ? SystemColors.ControlBrush : SharedBrushes.Mint;
             saveButton.Foreground = SystemParameters.HighContrast ? SystemColors.ControlTextBrush : SharedBrushes.Graphite;
             ApplyControlStyles();
         });
@@ -246,17 +258,33 @@ internal sealed class SettingsWindow : Window
 
     private void AddPreference(Panel form, string text, Control control, string? help = null)
     {
-        var row = new Grid { Margin = new Thickness(0, 0, 0, 16) };
+        var row = new Grid { Margin = new Thickness(0, 0, 0, 8), MinHeight = 64 };
         row.ColumnDefinitions.Add(new ColumnDefinition());
         row.ColumnDefinitions.Add(new ColumnDefinition());
         row.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         row.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         row.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-        var label = new Label { Content = new TextBlock { Text = text, TextWrapping = TextWrapping.Wrap },
-            Target = control, Foreground = Foreground, Padding = new Thickness(0, 8, 12, 8) };
+        var captionText = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
+        captionText.Children.Add(new TextBlock { Text = text, FontWeight = FontWeights.SemiBold, TextWrapping = TextWrapping.Wrap });
+        string description = text switch
+        {
+            "Startup" => "Open at sign-in",
+            "Overview shortcut" => "All windows",
+            "App Exposé shortcut" => "Windows from one app",
+            "Activation" => "Open from a screen corner",
+            "Corner" => "Pointer location",
+            _ => "Time before opening"
+        };
+        var summary = new TextBlock { Text = description, FontSize = 12, TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(0, 4, 0, 0) };
+        summary.SetResourceReference(TextBlock.ForegroundProperty, "SecondaryText");
+        captionText.Children.Add(summary);
+        var label = new Label { Content = captionText,
+            Target = control, Foreground = Foreground, Padding = new Thickness(0, 8, 8, 8), Margin = new Thickness(12, 0, 0, 0) };
         row.Children.Add(label);
         Grid.SetColumn(control, 1);
         control.MinHeight = 36;
+        control.Margin = new Thickness(12, 12, 12, 12);
         control.VerticalAlignment = VerticalAlignment.Center;
         if (control is not CheckBox)
         {
@@ -308,12 +336,39 @@ internal sealed class SettingsWindow : Window
             var caption = new DockPanel();
             DockPanel.SetDock(info, Dock.Right);
             caption.Children.Add(info);
-            var captionText = (UIElement)label.Content;
+            var title = (UIElement)label.Content;
             label.Content = null;
-            caption.Children.Add(captionText);
+            caption.Children.Add(title);
             label.Content = caption;
             contextualHelp.Add((info, detail));
         }
+        var glyph = new DecorativeGlyph { Text = text switch
+            {
+                "Startup" => "\uE7E8", "Overview shortcut" => "\uE8A7", "App Exposé shortcut" => "\uE737",
+                "Activation" => "\uE7C9", "Corner" => "\uE745", _ => "\uE916"
+            },
+            FontFamily = new FontFamily("Segoe Fluent Icons, Segoe MDL2 Assets"), FontSize = 16,
+            Width = 28, VerticalAlignment = VerticalAlignment.Center, IsHitTestVisible = false };
+        var labelContent = (UIElement)label.Content;
+        if (help == null)
+        {
+            label.Content = null;
+            var captionPanel = new DockPanel();
+            captionPanel.Children.Add(glyph);
+            captionPanel.Children.Add(labelContent);
+            label.Content = captionPanel;
+        }
+        else
+        {
+            ((DockPanel)labelContent).Children.Insert(1, glyph);
+        }
+        var surface = new Border { CornerRadius = new CornerRadius(8), BorderThickness = new Thickness(1), IsHitTestVisible = false };
+        surface.SetResourceReference(Border.BackgroundProperty, "PreferenceSurface");
+        surface.SetResourceReference(Border.BorderBrushProperty, "PreferenceEdge");
+        Grid.SetColumnSpan(surface, 2);
+        Grid.SetRowSpan(surface, 3);
+        Panel.SetZIndex(surface, -1);
+        row.Children.Add(surface);
         ReflowPreferences();
     }
 
@@ -321,10 +376,10 @@ internal sealed class SettingsWindow : Window
     {
         double width = categories.ActualWidth > 0 ? categories.ActualWidth : Width - 40;
         bool narrow = width < 520;
-        exposeHint.Margin = new Thickness(narrow ? 0 : 210, -8, 0, 12);
+        exposeHint.Margin = new Thickness(narrow ? 12 : 252, 0, 12, 12);
         foreach (var row in preferenceRows)
         {
-            row.ColumnDefinitions[0].Width = narrow ? new GridLength(1, GridUnitType.Star) : new GridLength(210);
+            row.ColumnDefinitions[0].Width = narrow ? new GridLength(1, GridUnitType.Star) : new GridLength(240);
             row.ColumnDefinitions[1].Width = narrow ? new GridLength(0) : new GridLength(1, GridUnitType.Star);
             Grid.SetRow(row.Children[1], narrow ? 1 : 0);
             Grid.SetColumn(row.Children[1], narrow ? 0 : 1);
@@ -337,12 +392,13 @@ internal sealed class SettingsWindow : Window
         var button = new Style(typeof(Button));
         button.Setters.Add(new Setter(Control.PaddingProperty, new Thickness(12, 8, 12, 8)));
         button.Setters.Add(new Setter(Control.MinHeightProperty, 36.0));
-        button.Setters.Add(new Setter(Control.BackgroundProperty, SystemParameters.HighContrast ? SystemColors.ControlBrush : Brush("#303B34")));
+        button.Setters.Add(new Setter(Control.BackgroundProperty, SystemParameters.HighContrast ? SystemColors.ControlBrush : SharedBrushes.Raised));
         button.Setters.Add(new Setter(Control.ForegroundProperty, Foreground));
         var border = new FrameworkElementFactory(typeof(Border), "Frame");
         border.SetValue(Border.BackgroundProperty, new TemplateBindingExtension(Control.BackgroundProperty));
         border.SetValue(Border.BorderBrushProperty, new TemplateBindingExtension(Control.BorderBrushProperty));
         border.SetValue(Border.BorderThicknessProperty, new Thickness(2));
+        border.SetValue(Border.CornerRadiusProperty, new CornerRadius(6));
         border.SetValue(Border.PaddingProperty, new TemplateBindingExtension(Control.PaddingProperty));
         var presenter = new FrameworkElementFactory(typeof(ContentPresenter), "ButtonText");
         presenter.SetValue(System.Windows.Documents.TextElement.ForegroundProperty, new TemplateBindingExtension(Control.ForegroundProperty));
@@ -375,6 +431,7 @@ internal sealed class SettingsWindow : Window
         var tabBorder = new FrameworkElementFactory(typeof(Border), "TabFrame");
         tabBorder.SetValue(Border.BackgroundProperty, Background);
         tabBorder.SetValue(Border.PaddingProperty, new TemplateBindingExtension(Control.PaddingProperty));
+        tabBorder.SetValue(Border.CornerRadiusProperty, new CornerRadius(6, 6, 0, 0));
         tabBorder.SetValue(Border.BorderThicknessProperty, new Thickness(0, 0, 0, 2));
         tabBorder.SetValue(Border.BorderBrushProperty, Brushes.Transparent);
         var header = new FrameworkElementFactory(typeof(ContentPresenter));
@@ -382,6 +439,7 @@ internal sealed class SettingsWindow : Window
         tabBorder.AppendChild(header);
         var tabTemplate = new ControlTemplate(typeof(TabItem)) { VisualTree = tabBorder };
         var selected = new Trigger { Property = TabItem.IsSelectedProperty, Value = true };
+        selected.Setters.Add(new Setter(Border.BackgroundProperty, SystemParameters.HighContrast ? SystemColors.WindowBrush : SharedBrushes.Surface, "TabFrame"));
         selected.Setters.Add(new Setter(Border.BorderBrushProperty, SystemParameters.HighContrast ? SystemColors.HighlightBrush : Brush("#7DDB9B"), "TabFrame"));
         tabTemplate.Triggers.Add(selected);
         var tabHover = new Trigger { Property = UIElement.IsMouseOverProperty, Value = true };
@@ -406,13 +464,36 @@ internal sealed class SettingsWindow : Window
         action.SetValue(TextBlock.FontWeightProperty, FontWeights.SemiBold);
         action.SetBinding(TextBlock.TextProperty, new Binding("Tag") { RelativeSource = new RelativeSource(RelativeSourceMode.FindAncestor, typeof(Button), 1) });
         panel.AppendChild(action);
-        var chord = new FrameworkElementFactory(typeof(TextBlock));
-        chord.SetBinding(TextBlock.TextProperty, new Binding());
-        chord.SetValue(TextBlock.TextWrappingProperty, TextWrapping.Wrap);
+        var chord = new FrameworkElementFactory(typeof(ItemsControl));
+        chord.SetBinding(ItemsControl.ItemsSourceProperty, new Binding { Converter = new KeycapConverter() });
+        var keys = new FrameworkElementFactory(typeof(WrapPanel));
+        chord.SetValue(ItemsControl.ItemsPanelProperty, new ItemsPanelTemplate(keys));
+        var key = new FrameworkElementFactory(typeof(Border));
+        key.SetResourceReference(Border.BackgroundProperty, "KeycapSurface");
+        key.SetResourceReference(Border.BorderBrushProperty, "FieldBorder");
+        key.SetValue(Border.BorderThicknessProperty, new Thickness(1, 1, 1, 2));
+        key.SetValue(Border.CornerRadiusProperty, new CornerRadius(4));
+        key.SetValue(Border.PaddingProperty, new Thickness(6, 2, 6, 2));
+        key.SetValue(FrameworkElement.MarginProperty, new Thickness(0, 2, 4, 2));
+        var keyText = new FrameworkElementFactory(typeof(TextBlock));
+        keyText.SetBinding(TextBlock.TextProperty, new Binding());
+        key.AppendChild(keyText);
+        chord.SetValue(ItemsControl.ItemTemplateProperty, new DataTemplate { VisualTree = key });
         panel.AppendChild(chord);
         return new DataTemplate { VisualTree = panel };
     }
+    private sealed class KeycapConverter : IValueConverter
+    {
+        public object Convert(object value, Type targetType, object parameter, CultureInfo culture)
+            => value is string text ? text.Split('+', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries) : Array.Empty<string>();
+        public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture)
+            => throw new NotSupportedException();
+    }
     private sealed class DecorativeImage : Image
+    {
+        protected override AutomationPeer? OnCreateAutomationPeer() => null;
+    }
+    private sealed class DecorativeGlyph : TextBlock
     {
         protected override AutomationPeer? OnCreateAutomationPeer() => null;
     }
@@ -469,6 +550,7 @@ internal sealed class SettingsWindow : Window
 
     private void ReportRecordingError(string error)
     {
+        feedback.Tag = "Error";
         feedback.Text = error;
         RefreshRecorderNames();
     }
@@ -490,6 +572,7 @@ internal sealed class SettingsWindow : Window
     internal void ReportShortcutWarning(string warning)
     {
         shortcutWarning = true;
+        feedback.Tag = "Error";
         feedback.Text = warning;
         UIElementAutomationPeer.FromElement(feedback)?.RaiseAutomationEvent(AutomationEvents.LiveRegionChanged);
     }
@@ -585,6 +668,7 @@ internal sealed class SettingsWindow : Window
         {
             categories.SelectedIndex = 2;
             delay.Tag = "Invalid";
+            feedback.Tag = "Error";
             feedback.Text = "Enter a delay of zero or more milliseconds.";
             delay.Focus();
             return false;
@@ -595,6 +679,7 @@ internal sealed class SettingsWindow : Window
         if (!OverviewShortcutPair.TryParse(candidate.Hotkey, candidate.AppExposeHotkey, out _, out string shortcutError))
         {
             categories.SelectedIndex = 1;
+            feedback.Tag = "Error";
             feedback.Text = shortcutError;
             shortcut.Focus();
             return false;
@@ -614,6 +699,7 @@ internal sealed class SettingsWindow : Window
         else
         {
             RestorePreferences();
+            feedback.Tag = "Error";
             feedback.Text = "Settings were not applied. Previous preferences are shown; review the error before trying again.";
             return false;
         }

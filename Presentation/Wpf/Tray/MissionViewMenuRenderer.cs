@@ -1,4 +1,5 @@
 using System.Drawing;
+using System.Drawing.Drawing2D;
 using System.Windows.Forms;
 
 namespace WindowScatter;
@@ -27,6 +28,25 @@ internal sealed class MissionViewMenuRenderer : ToolStripProfessionalRenderer
     protected override void OnRenderMenuItemBackground(ToolStripItemRenderEventArgs e)
     {
         var colors = ItemColors(e.Item);
+        if (!SystemInformation.HighContrast)
+        {
+            using var ground = new SolidBrush(Palette(false, false, false, true, false).Background);
+            e.Graphics.FillRectangle(ground, new Rectangle(Point.Empty, e.Item.Size));
+            var bounds = new Rectangle(4, 1, e.Item.Width - 8, e.Item.Height - 2);
+            if (bounds.Width < 12 || bounds.Height < 12) return;
+            using var path = new GraphicsPath();
+            path.AddArc(bounds.Left, bounds.Top, 12, 12, 180, 90);
+            path.AddArc(bounds.Right - 12, bounds.Top, 12, 12, 270, 90);
+            path.AddArc(bounds.Right - 12, bounds.Bottom - 12, 12, 12, 0, 90);
+            path.AddArc(bounds.Left, bounds.Bottom - 12, 12, 12, 90, 90);
+            path.CloseFigure();
+            using var surface = new SolidBrush(colors.Background);
+            var state = e.Graphics.Save();
+            e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+            e.Graphics.FillPath(surface, path);
+            e.Graphics.Restore(state);
+            return;
+        }
         using var brush = new SolidBrush(colors.Background);
         e.Graphics.FillRectangle(brush, new Rectangle(Point.Empty, e.Item.Size));
     }
