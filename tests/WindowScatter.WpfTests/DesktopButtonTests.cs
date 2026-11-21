@@ -15,6 +15,31 @@ using Xunit;
 public class DesktopButtonTests
 {
     [Fact]
+    public void DetachedChromeRetainsItsReadableForegroundAndFontWithoutTheOverviewHost()
+        => RunSta(() =>
+        {
+            var host = LoadWindow();
+            try
+            {
+                var chrome = (Canvas)host.FindName("ChromeCanvas");
+                ((Canvas)host.Content).Children.Remove(chrome);
+                var separateSurface = new Border { Child = chrome };
+                separateSurface.Measure(new Size(720, 480));
+                separateSurface.Arrange(new Rect(0, 0, 720, 480));
+                separateSurface.UpdateLayout();
+                var status = (TextBlock)host.FindName("MoveStatus");
+                var button = (Button)host.FindName("DesktopButton");
+                Assert.Equal(SystemParameters.HighContrast ? SystemColors.WindowTextColor : SharedBrushes.Text.Color,
+                    ((SolidColorBrush)status.Foreground).Color);
+                Assert.Equal(((SolidColorBrush)status.Foreground).Color, ((SolidColorBrush)button.Foreground).Color);
+                Assert.Equal("Segoe UI Variable, Segoe UI", status.FontFamily.Source);
+                Assert.Equal(((SolidColorBrush)button.Foreground).Color,
+                    ((SolidColorBrush)((System.Windows.Shapes.Path)button.Content).Stroke).Color);
+            }
+            finally { host.Close(); }
+        });
+
+    [Fact]
     public void ActualXamlUsesDecorativeVectorInsideNamedMouseAndAutomationButton()
         => RunSta(() =>
         {

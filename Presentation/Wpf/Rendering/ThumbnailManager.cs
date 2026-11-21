@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
@@ -86,7 +87,7 @@ namespace WindowScatter
                     Width = targetW + 10,
                     Height = targetH + 10,
                     BorderThickness = new System.Windows.Thickness(3),
-                    BorderBrush = new SolidColorBrush(Color.FromRgb(255, 255, 255)),
+                    BorderBrush = SharedBrushes.Mint,
                     CornerRadius = new System.Windows.CornerRadius(8),
                     Opacity = 0,
                     IsHitTestVisible = false,
@@ -95,13 +96,6 @@ namespace WindowScatter
                         BorderBrush = Brushes.Black,
                         BorderThickness = new System.Windows.Thickness(2),
                         CornerRadius = new System.Windows.CornerRadius(5)
-                    },
-                    Effect = new DropShadowEffect
-                    {
-                        BlurRadius = 18,
-                        ShadowDepth = 0,
-                        Opacity = 0.65,
-                        Color = Colors.Black
                     }
                 };
 
@@ -115,19 +109,15 @@ namespace WindowScatter
                     Height = 20,
                     ClipToBounds = true,
                     Foreground = Brushes.White,
+                    Background = SharedBrushes.Graphite,
+                    Padding = new Thickness(6, 0, 6, 0),
                     FontSize = 13,
-                    FontWeight = System.Windows.FontWeights.SemiBold,
+                    FontFamily = new FontFamily("Segoe UI Variable, Segoe UI"),
+                    FontWeight = System.Windows.FontWeights.Normal,
                     TextAlignment = System.Windows.TextAlignment.Center,
                     TextTrimming = System.Windows.TextTrimming.CharacterEllipsis,
                     Opacity = 0,
-                    IsHitTestVisible = false,
-                    Effect = new DropShadowEffect
-                    {
-                        BlurRadius = 8,
-                        ShadowDepth = 1,
-                        Opacity = 0.9,
-                        Color = Colors.Black
-                    }
+                    IsHitTestVisible = false
                 };
 
                 Canvas.SetLeft(titleLabel, targetX + (targetW - titleLabel.Width) / 2);
@@ -179,6 +169,29 @@ namespace WindowScatter
             }
             var logicalOrder = layouts.Select((l, i) => (l.Window.Handle, i)).ToDictionary(x => x.Handle, x => x.i);
             windowThumbs.Sort((a, b) => logicalOrder[a.WindowHandle].CompareTo(logicalOrder[b.WindowHandle]));
+            ApplyPalette(SystemParameters.HighContrast, SystemParameters.ClientAreaAnimation);
+        }
+
+        internal void ApplyPalette(bool highContrast, bool effects)
+        {
+            foreach (var thumb in windowThumbs)
+            {
+                if (thumb.HighlightBorder is { } frame)
+                {
+                    frame.BorderBrush = highContrast ? SystemColors.HighlightBrush : SharedBrushes.Mint;
+                    if (frame.Child is Border inner)
+                        inner.BorderBrush = highContrast ? SystemColors.WindowBrush : SharedBrushes.Graphite;
+                    frame.Effect = !highContrast && effects
+                        ? new DropShadowEffect { BlurRadius = 16, ShadowDepth = 2, Opacity = .35, Color = Colors.Black }
+                        : null;
+                }
+                if (thumb.TitleLabel is { } title)
+                {
+                    title.Foreground = highContrast ? SystemColors.WindowTextBrush : SharedBrushes.Text;
+                    title.Background = highContrast ? SystemColors.WindowBrush : SharedBrushes.Graphite;
+                    title.Effect = null;
+                }
+            }
         }
 
         /// <summary>
@@ -232,7 +245,7 @@ namespace WindowScatter
                     thumb.HighlightBorder.Opacity = isSelected ? 1 : 0;
 
                 if (thumb.TitleLabel != null)
-                    thumb.TitleLabel.FontSize = isSelected ? 14 : 13;
+                    thumb.TitleLabel.FontWeight = isSelected ? FontWeights.SemiBold : FontWeights.Normal;
             }
         }
 
