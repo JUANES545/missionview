@@ -4,12 +4,47 @@ using System.Windows.Automation;
 using System.Windows.Automation.Peers;
 using System.Windows.Automation.Provider;
 using System.Windows.Interop;
+using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Media;
 using System.Windows.Threading;
 using WindowScatter;
 using Xunit;
 
 public class NormalThumbnailAutomationTests
 {
+    [Fact]
+    public void SelectionAndSystemPalettePreserveLabelGeometryAndAccessibleTitleWithoutThumbnailRegistration()
+        => RunSta(() =>
+        {
+            const string title = "Full accessible title for the selected window";
+            var target = new OverviewThumbnail(title);
+            var frame = new Border { Width = 310, Height = 210, Child = new Border() };
+            var label = new TextBlock { Text = title, Width = 300, Height = 20, FontSize = 13 };
+            var thumb = new WindowThumb { WindowHandle = new(1), ClickBorder = target, HighlightBorder = frame, TitleLabel = label };
+            var manager = new ThumbnailManager(new Canvas(), [thumb], IntPtr.Zero, _ => { }, _ => { });
+            manager.ApplyPalette(false, false);
+            label.Measure(new Size(300, 20));
+            label.Arrange(new Rect(0, 0, 300, 20));
+            var bounds = label.RenderSize;
+            manager.SetSelectedWindow(new(1));
+            label.UpdateLayout();
+            Assert.Equal(bounds, label.RenderSize);
+            Assert.Equal(13, label.FontSize);
+            Assert.Equal(1, frame.Opacity);
+            Assert.Null(frame.Effect);
+            manager.ApplyPalette(true, true);
+            Assert.Equal(SystemColors.HighlightColor, ((SolidColorBrush)frame.BorderBrush).Color);
+            Assert.Equal(SystemColors.WindowTextColor, ((SolidColorBrush)label.Foreground).Color);
+            Assert.Equal(SystemColors.WindowColor, ((SolidColorBrush)label.Background).Color);
+            Assert.Null(frame.Effect);
+            manager.SetSelectedWindow(IntPtr.Zero);
+            label.UpdateLayout();
+            Assert.Equal(bounds, label.RenderSize);
+            Assert.Equal(0, frame.Opacity);
+            Assert.Equal(title, UIElementAutomationPeer.CreatePeerForElement(target)!.GetName());
+        });
+
     [Fact]
     public void ProductionRegistrationPublishesFullTitleAndActionablePeerWithoutChangingVisualTitle()
         => RunSta(() =>

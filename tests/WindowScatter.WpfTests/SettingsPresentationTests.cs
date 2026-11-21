@@ -12,6 +12,104 @@ using Xunit;
 
 public sealed class SettingsPresentationTests
 {
+    [Fact]
+    public void DecorativePreferenceGlyphsStayOutOfAutomationWithoutHidingLabelsDescriptionsOrHelp()
+        => Sta(() =>
+        {
+            var window = Create();
+            try
+            {
+                var tabs = Logical(window).OfType<TabControl>().Single();
+                var content = (UIElement)window.Content;
+                window.Content = null;
+                var root = new Border { Background = window.Background, Child = content };
+                window.Content = root;
+                for (int index = 0; index < 3; index++)
+                {
+                    tabs.SelectedIndex = index;
+                    Layout(root, 720, 440);
+                    var panel = (StackPanel)((ScrollViewer)((TabItem)tabs.Items[index]).Content).Content;
+                    foreach (var row in panel.Children.OfType<Grid>())
+                    {
+                        var label = Assert.IsType<Label>(row.Children[0]);
+                        var labelPeer = UIElementAutomationPeer.CreatePeerForElement(label)!;
+                        var peers = AutomationTree(labelPeer).ToArray();
+                        Assert.DoesNotContain(peers.Select(p => p.GetName()), ContainsPrivateUseGlyph);
+                        var glyph = Assert.Single(Visual(label).OfType<TextBlock>(), t => ContainsPrivateUseGlyph(t.Text));
+                        Assert.Null(UIElementAutomationPeer.CreatePeerForElement(glyph));
+                        Assert.Same(row.Children[1], label.Target);
+                        var caption = Logical(label).OfType<StackPanel>().Single();
+                        foreach (var text in caption.Children.OfType<TextBlock>())
+                            Assert.Contains(peers, p => p is FrameworkElementAutomationPeer element &&
+                                ReferenceEquals(element.Owner, text) && p.GetName() == text.Text);
+                        var controlPeer = UIElementAutomationPeer.CreatePeerForElement(label.Target)!;
+                        Assert.NotEmpty(controlPeer.GetName());
+                        foreach (var help in Logical(label).OfType<Button>())
+                        {
+                            var helpPeer = Assert.Single(peers, p => p is FrameworkElementAutomationPeer element &&
+                                ReferenceEquals(element.Owner, help));
+                            Assert.EndsWith(" help", helpPeer.GetName());
+                            Assert.NotNull(helpPeer.GetPattern(PatternInterface.Invoke));
+                        }
+                    }
+                }
+            }
+            finally { window.Close(); }
+        });
+
+    private static bool ContainsPrivateUseGlyph(string text)
+        => text.Any(c => char.GetUnicodeCategory(c) == System.Globalization.UnicodeCategory.PrivateUse);
+
+    private static IEnumerable<AutomationPeer> AutomationTree(AutomationPeer root)
+    {
+        yield return root;
+        foreach (var child in root.GetChildren() ?? [])
+            foreach (var peer in AutomationTree(child)) yield return peer;
+    }
+
+    [Fact]
+    public void KeycapsFollowRecordingAndCancellationAndRefreshTheSystemPaletteWithoutChangingTheShortcut()
+        => Sta(() =>
+        {
+            var window = Create();
+            try
+            {
+                var tabs = Logical(window).OfType<TabControl>().Single();
+                tabs.SelectedIndex = 1;
+                var content = (UIElement)window.Content;
+                window.Content = null;
+                var root = new Border { Background = window.Background, Child = content };
+                window.Content = root;
+                Layout(root, 720, 440);
+                var recorder = NamedButton(window, "Overview shortcut");
+                var keys = Visual(recorder).OfType<ItemsControl>().Single();
+                Assert.Equal(new[] { "Win", "F12" }, keys.Items.Cast<string>());
+                var peer = UIElementAutomationPeer.CreatePeerForElement(recorder)!;
+                Assert.Equal("Overview shortcut: Win+F12", peer.GetName());
+                ClickRecorder(recorder);
+                Layout(root, 720, 440);
+                Assert.Equal(new[] { "Recording..." }, keys.Items.Cast<string>());
+                window.RecordVirtualKey(0x1B, 0, true);
+                Layout(root, 720, 440);
+                Assert.Equal(new[] { "Win", "F12" }, keys.Items.Cast<string>());
+                Assert.Equal("Win+F12", recorder.Content);
+                Assert.Equal("Overview shortcut: Win+F12", peer.GetName());
+                var key = Visual(keys).OfType<Border>().First(b => b.Child is TextBlock);
+                var bounds = key.RenderSize;
+                SettingsControlStyles.Apply(window.Resources, true);
+                Layout(root, 720, 440);
+                Assert.Equal(SystemColors.WindowColor, ((SolidColorBrush)key.Background).Color);
+                Assert.Equal(SystemColors.WindowTextColor, ((SolidColorBrush)key.BorderBrush).Color);
+                Assert.Equal(bounds, key.RenderSize);
+                Capture(root, "settings-keycaps-system-palette-offscreen.png");
+                SettingsControlStyles.Apply(window.Resources, false);
+                Layout(root, 720, 440);
+                Assert.Same(window.Resources["KeycapSurface"], key.Background);
+                Assert.Equal(bounds, key.RenderSize);
+            }
+            finally { window.Close(); }
+        });
+
     [Theory]
     [InlineData(720, 560, 14, false)]
     [InlineData(720, 480, 14, false)]

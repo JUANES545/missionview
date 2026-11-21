@@ -9,14 +9,14 @@
         AllowsTransparency="False"
         Background="Black"
         PreviewKeyDown="Window_KeyDown"
-        Topmost="True">
-
+        Topmost="True"
+        FontFamily="Segoe UI Variable, Segoe UI">
     <Canvas x:Name="RenderCanvas" ClipToBounds="True">
         <!-- Desktop capture or wallpaper fallback. -->
         <Image x:Name="BackgroundImage" 
                Panel.ZIndex="0"/>
 
-        <!-- Reserved overlay layer for future glass effects. -->
+        <!-- Reserved layer; the backdrop below is a scrim, not acrylic. -->
         <Border x:Name="FrostedGlass"
                 Panel.ZIndex="1"
                 Background="#80FFFFFF"
@@ -26,22 +26,44 @@
         <!-- Dark overlay for contrast. -->
         <Border x:Name="DimOverlay"
                 Panel.ZIndex="2"
-                Background="#60000000"
                 Width="{Binding RelativeSource={RelativeSource AncestorType=Window}, Path=ActualWidth}"
-                Height="{Binding RelativeSource={RelativeSource AncestorType=Window}, Path=ActualHeight}"/>
+                Height="{Binding RelativeSource={RelativeSource AncestorType=Window}, Path=ActualHeight}">
+            <Border.Style>
+                <Style TargetType="Border">
+                    <Setter Property="Background" Value="#A0202522"/>
+                    <Style.Triggers>
+                        <DataTrigger Binding="{Binding Path=(SystemParameters.HighContrast)}" Value="True">
+                            <Setter Property="Background" Value="{DynamicResource {x:Static SystemColors.WindowBrushKey}}"/>
+                        </DataTrigger>
+                    </Style.Triggers>
+                </Style>
+            </Border.Style>
+        </Border>
 
         <Canvas x:Name="ChromeCanvas"
                 Width="{Binding RelativeSource={RelativeSource AncestorType=Window}, Path=ActualWidth}"
                 Height="{Binding RelativeSource={RelativeSource AncestorType=Window}, Path=ActualHeight}">
+            <Canvas.Style>
+                <Style TargetType="Canvas">
+                    <Setter Property="TextElement.Foreground" Value="#F3F5F4"/>
+                    <Setter Property="TextElement.FontFamily" Value="Segoe UI Variable, Segoe UI"/>
+                    <Style.Triggers>
+                        <DataTrigger Binding="{Binding Path=(SystemParameters.HighContrast)}" Value="True">
+                            <Setter Property="TextElement.Foreground" Value="{DynamicResource {x:Static SystemColors.WindowTextBrushKey}}"/>
+                        </DataTrigger>
+                    </Style.Triggers>
+                </Style>
+            </Canvas.Style>
             <local:OverviewThumbnailCanvas x:Name="ScatterCanvas"
                     Background="Transparent"
                     MouseLeftButtonDown="ScatterCanvas_MouseLeftButtonDown"
                     Width="{Binding RelativeSource={RelativeSource AncestorType=Window}, Path=ActualWidth}"
                     Height="{Binding RelativeSource={RelativeSource AncestorType=Window}, Path=ActualHeight}"/>
             <TextBlock x:Name="EmptyMessage" Text="No windows on this display.&#10;Drop a window here."
-                       Foreground="White" FontSize="16" TextAlignment="Center"
+                       FontSize="16" TextAlignment="Center"
                        IsHitTestVisible="False" Visibility="Hidden"/>
             <local:OverviewDesktopButton x:Name="DesktopButton" Width="44" Height="44" Padding="6"
+                    Foreground="{Binding Path=(TextElement.Foreground), RelativeSource={RelativeSource AncestorType=Canvas}}"
                     Focusable="False" IsTabStop="False" FocusVisualStyle="{x:Null}"
                     Canvas.Left="16" Canvas.Top="16" Panel.ZIndex="1"
                     Click="DesktopButton_Click"
@@ -50,22 +72,26 @@
                 <Button.Template>
                     <ControlTemplate TargetType="Button">
                         <Border x:Name="Frame" Background="#202020" BorderBrush="White"
-                                BorderThickness="2" CornerRadius="3" Padding="{TemplateBinding Padding}">
+                                BorderThickness="2" CornerRadius="10" Padding="{TemplateBinding Padding}">
                             <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
                         </Border>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsMouseOver" Value="True">
                                 <Setter TargetName="Frame" Property="Background" Value="#404040"/>
                             </Trigger>
+                            <DataTrigger Binding="{Binding Path=(SystemParameters.HighContrast)}" Value="True">
+                                <Setter TargetName="Frame" Property="Background" Value="{DynamicResource {x:Static SystemColors.WindowBrushKey}}"/>
+                                <Setter TargetName="Frame" Property="BorderBrush" Value="{DynamicResource {x:Static SystemColors.WindowTextBrushKey}}"/>
+                            </DataTrigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
                 </Button.Template>
-                <Path Width="24" Height="24" Stroke="White" StrokeThickness="2"
+                <Path Width="24" Height="24" Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" StrokeThickness="2"
                       StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round"
                       Data="M2,3 H22 V17 H2 Z M12,17 V21 M8,21 H16"
                       Focusable="False" IsHitTestVisible="False"/>
             </local:OverviewDesktopButton>
-            <TextBlock x:Name="MoveStatus" Canvas.Left="72" Canvas.Top="28" Foreground="White"
+            <TextBlock x:Name="MoveStatus" Canvas.Left="72" Canvas.Top="28"
                        FontSize="14" TextTrimming="CharacterEllipsis" IsHitTestVisible="False">
                 <TextBlock.Style>
                     <Style TargetType="TextBlock">

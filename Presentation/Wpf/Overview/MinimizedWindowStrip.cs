@@ -11,6 +11,7 @@ using System.Windows.Media;
 using System.Windows.Markup;
 using System.ComponentModel;
 using System.Windows.Data;
+using System.Windows.Media.Effects;
 
 namespace WindowScatter
 {
@@ -41,7 +42,7 @@ namespace WindowScatter
             UseLayoutRounding = true;
             SnapsToDevicePixels = true;
             SetResourceReference(BackgroundProperty, "Shelf");
-            CornerRadius = new CornerRadius(6);
+            CornerRadius = new CornerRadius(20);
             if (windows.Count == 0) Visibility = Visibility.Collapsed;
             var dock = new DockPanel { Margin = new Thickness(12, 10, 12, 10) };
             var header = new TextBlock { Text = $"Minimized ({windows.Count})", FontFamily = new("Segoe UI"), TextTrimming = TextTrimming.CharacterEllipsis,
@@ -187,18 +188,21 @@ namespace WindowScatter
 
         private void SystemPropertyChanged(object? sender, PropertyChangedEventArgs e)
         {
-            if (e.PropertyName == nameof(SystemParameters.HighContrast)) ApplyPalette(SystemParameters.HighContrast);
+            if (e.PropertyName is nameof(SystemParameters.HighContrast) or nameof(SystemParameters.ClientAreaAnimation))
+                ApplyPalette(SystemParameters.HighContrast);
         }
 
         internal void ApplyPalette(bool highContrast)
         {
-            Resources["Shelf"] = highContrast ? SystemColors.WindowBrush : SharedBrushes.Graphite;
-            Resources["Item"] = highContrast ? SystemColors.WindowBrush : Brush("#303B34");
-            Resources["Hover"] = highContrast ? SystemColors.WindowBrush : Brush("#3B4940");
-            Resources["Text"] = highContrast ? SystemColors.WindowTextBrush : Brush("#F5F6F5");
-            Resources["Secondary"] = highContrast ? SystemColors.WindowTextBrush : Brush("#CDD4CF");
-            Resources["Selected"] = highContrast ? SystemColors.HighlightBrush : Brush("#303B34");
-            Resources["SelectedText"] = highContrast ? SystemColors.HighlightTextBrush : Brush("#F5F6F5");
+            bool effects = !highContrast && SystemParameters.ClientAreaAnimation;
+            Resources["Shelf"] = highContrast ? SystemColors.WindowBrush : effects ? SharedBrushes.Dock : SharedBrushes.Graphite;
+            Effect = effects ? new DropShadowEffect { BlurRadius = 20, ShadowDepth = 4, Opacity = .24, Color = Colors.Black } : null;
+            Resources["Item"] = highContrast ? SystemColors.WindowBrush : SharedBrushes.Raised;
+            Resources["Hover"] = highContrast ? SystemColors.WindowBrush : Brush("#465B4C");
+            Resources["Text"] = highContrast ? SystemColors.WindowTextBrush : SharedBrushes.Text;
+            Resources["Secondary"] = highContrast ? SystemColors.WindowTextBrush : SharedBrushes.Secondary;
+            Resources["Selected"] = highContrast ? SystemColors.HighlightBrush : Brush("#465B4C");
+            Resources["SelectedText"] = highContrast ? SystemColors.HighlightTextBrush : SharedBrushes.Text;
             Resources["Outline"] = highContrast ? SystemColors.HighlightTextBrush : Brushes.White;
             Resources["Focus"] = highContrast ? SystemColors.WindowTextBrush : Brushes.White;
         }
@@ -230,8 +234,8 @@ namespace WindowScatter
                 xmlns:local="clr-namespace:WindowScatter;assembly=ASSEMBLY"
                 TargetType="{x:Type local:MinimizedWindowButton}">
               <Grid SnapsToDevicePixels="True" Background="Transparent">
-                <Border x:Name="Surface" Background="{DynamicResource Item}" CornerRadius="3"/>
-                <Border x:Name="Frame" Margin="2" Background="Transparent" CornerRadius="2"
+                <Border x:Name="Surface" Background="{DynamicResource Item}" CornerRadius="10"/>
+                <Border x:Name="Frame" Margin="2" Background="Transparent" CornerRadius="8"
                     BorderThickness="2" BorderBrush="Transparent">
                   <Grid Margin="6,0">
                     <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="16"/></Grid.ColumnDefinitions>
@@ -242,7 +246,7 @@ namespace WindowScatter
                   </Grid>
                 </Border>
                 <Rectangle x:Name="Focus" Margin="0.5" Stroke="{DynamicResource Focus}" StrokeThickness="1"
-                    StrokeDashArray="1,2" IsHitTestVisible="False" Visibility="Hidden"/>
+                    RadiusX="10" RadiusY="10" StrokeDashArray="1,2" IsHitTestVisible="False" Visibility="Hidden"/>
               </Grid>
               <ControlTemplate.Triggers>
                 <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Surface" Property="Background" Value="{DynamicResource Hover}"/></Trigger>
