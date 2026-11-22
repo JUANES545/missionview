@@ -41,6 +41,10 @@ public sealed class AppSettingsTests : IDisposable
         Assert.Equal(0.63, settings.AnimationSpeed);
         Assert.True(settings.RunOnStartup);
         Assert.Equal("legacy", settings.Renderer);
+        Assert.Equal("White", settings.SelectionBorderColor);
+        Assert.Equal("Standard", settings.ThumbnailSize);
+        Assert.Equal(160d / 255 * 100, settings.BackgroundDimming);
+        Assert.False(settings.ReduceAnimations);
     }
 
     [Fact]
@@ -60,6 +64,13 @@ public sealed class AppSettingsTests : IDisposable
     [InlineData("""{"HotCornerDelay":-1}""")]
     [InlineData("""{"AnimationSpeed":0}""")]
     [InlineData("""{"RunOnStartup":"yes"}""")]
+    [InlineData("""{"SelectionBorderColor":"Red"}""")]
+    [InlineData("""{"SelectionBorderColor":null}""")]
+    [InlineData("""{"ThumbnailSize":"Huge"}""")]
+    [InlineData("""{"ThumbnailSize":null}""")]
+    [InlineData("""{"BackgroundDimming":-1}""")]
+    [InlineData("""{"BackgroundDimming":101}""")]
+    [InlineData("""{"ReduceAnimations":"yes"}""")]
     public void CorruptNewSettingsNeverFallBackToLegacyOrOverwriteEitherFile(string invalid)
     {
         Put(Current, invalid);
@@ -110,6 +121,82 @@ public sealed class AppSettingsTests : IDisposable
         Assert.Equal(JsonSerializer.Serialize(new AppSettings()), JsonSerializer.Serialize(settings));
         Assert.True(File.Exists(Current));
         Assert.False(File.Exists(Legacy));
+    }
+
+    [Fact]
+    public void OlderProfilesKeepAllDisplaysAndMinimizedWindowsEnabled()
+    {
+        Put(Current, Profile);
+        var settings = Store.Load();
+        Assert.Equal("All", settings.OverviewMonitorScope);
+        Assert.True(settings.ShowMinimizedWindows);
+        Store.Save(settings);
+        Assert.Equal("All", Store.Load().OverviewMonitorScope);
+        Assert.True(Store.Load().ShowMinimizedWindows);
+    }
+
+    [Fact]
+    public void DisplayOptionsPersistCopyAndRollbackWithTheOtherPreferences()
+    {
+        Put(Current, Profile);
+        var settings = Store.Load();
+        var candidate = settings.Copy();
+        candidate.OverviewMonitorScope = "Current";
+        candidate.ShowMinimizedWindows = false;
+        Assert.Equal("All", settings.OverviewMonitorScope);
+        Assert.True(settings.ShowMinimizedWindows);
+        Assert.True(new PreferencesService(settings, Store.Save).TryApply(candidate, () => { }, () => { }, error => throw error));
+        Assert.Equal("Current", settings.OverviewMonitorScope);
+        Assert.False(settings.ShowMinimizedWindows);
+        Assert.Equal("Current", Store.Load().OverviewMonitorScope);
+        Assert.False(Store.Load().ShowMinimizedWindows);
+
+        candidate = settings.Copy();
+        candidate.OverviewMonitorScope = "All";
+        candidate.ShowMinimizedWindows = true;
+        var errors = new List<Exception>();
+        Assert.False(new PreferencesService(settings, Store.Save).TryApply(candidate,
+            () => throw new IOException("apply failed"), () => { }, errors.Add));
+        Assert.Single(errors);
+        Assert.Equal("Current", settings.OverviewMonitorScope);
+        Assert.False(settings.ShowMinimizedWindows);
+        Assert.Equal("Current", Store.Load().OverviewMonitorScope);
+        Assert.False(Store.Load().ShowMinimizedWindows);
+    }
+
+    [Theory]
+    [InlineData("""{"OverviewMonitorScope":null}""")]
+    [InlineData("""{"OverviewMonitorScope":"current"}""")]
+    [InlineData("""{"OverviewMonitorScope":"Primary"}""")]
+    [InlineData("""{"OverviewMonitorScope":1}""")]
+    [InlineData("""{"ShowMinimizedWindows":null}""")]
+    [InlineData("""{"ShowMinimizedWindows":"false"}""")]
+    public void InvalidDisplayOptionsNeverOverwriteTheSavedProfile(string invalid)
+    {
+        Put(Current, invalid);
+        var error = Record.Exception(() => Store.Load());
+        Assert.NotNull(error);
+        Assert.True(JsonSettingsStore.IsPersistenceError(error));
+        Assert.Equal(invalid, File.ReadAllText(Current));
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("Primary")]
+    public void UnsupportedScopeEditIsReportedWithoutApplyingOrReplacingPreferences(string? scope)
+    {
+        Put(Current, Profile);
+        var settings = Store.Load();
+        var candidate = settings.Copy();
+        candidate.OverviewMonitorScope = scope!;
+        int applied = 0;
+        var errors = new List<Exception>();
+        Assert.False(new PreferencesService(settings, Store.Save).TryApply(candidate,
+            () => applied++, () => { }, errors.Add));
+        Assert.IsType<InvalidDataException>(Assert.Single(errors));
+        Assert.Equal(0, applied);
+        Assert.Equal("All", settings.OverviewMonitorScope);
+        Assert.Equal(Profile, File.ReadAllText(Current));
     }
 
     [Fact]
@@ -177,6 +264,41 @@ public sealed class AppSettingsTests : IDisposable
         Assert.Equal("Win+F12", activeHotkey);
         Assert.True(registry);
         Assert.IsType<UnauthorizedAccessException>(Assert.Single(errors));
+    }
+
+    [Theory]
+    [InlineData("White", "Compact", 0)]
+    [InlineData("Blue", "Standard", 100)]
+    [InlineData("Mint", "Large", 78.5)]
+    public void PresentationPreferencesRoundTripAndRollBackAsOneTransaction(string border, string size, double dimming)
+    {
+        Put(Current, Profile);
+        var settings = Store.Load();
+        var candidate = settings.Copy();
+        candidate.SelectionBorderColor = border;
+        candidate.ThumbnailSize = size;
+        candidate.BackgroundDimming = dimming;
+        candidate.ReduceAnimations = true;
+        AssertProfile(settings);
+        Assert.True(new PreferencesService(settings, Store.Save).TryApply(candidate, () => { }, () => { }, e => throw e));
+        var saved = Store.Load();
+        Assert.Equal(border, saved.SelectionBorderColor);
+        Assert.Equal(size, saved.ThumbnailSize);
+        Assert.Equal(dimming, saved.BackgroundDimming);
+        Assert.True(saved.ReduceAnimations);
+        string before = File.ReadAllText(Current);
+        var reset = new AppSettings();
+        Assert.False(new PreferencesService(settings, Store.Save).TryApply(reset,
+            () => throw new IOException("refused"), () => { }, e => Assert.IsType<IOException>(e)));
+        Assert.Equal(before, File.ReadAllText(Current));
+        Assert.Equal(border, settings.SelectionBorderColor);
+        Assert.Equal(size, settings.ThumbnailSize);
+        Assert.Equal(dimming, settings.BackgroundDimming);
+        Assert.True(settings.ReduceAnimations);
+        candidate = settings.Copy();
+        candidate.BackgroundDimming = double.NaN;
+        Assert.Throws<InvalidDataException>(() => Store.Save(candidate));
+        Assert.Equal(before, File.ReadAllText(Current));
     }
 
     [Fact]

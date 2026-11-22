@@ -143,7 +143,9 @@ public sealed class SettingsPresentationTests
                     var scroll = (ScrollViewer)((TabItem)tabs.Items[index]).Content;
                     if (width == 720)
                     {
-                        Assert.Equal(0, scroll.ScrollableHeight);
+                        if (index == 0) Assert.True(scroll.ScrollableHeight > 0,
+                            $"General extent={scroll.ExtentHeight}, viewport={scroll.ViewportHeight}, panel={panel.ActualHeight}, outer={Visual(root).OfType<ScrollViewer>().Single(s => s.Content is DockPanel).ScrollableHeight}");
+                        else Assert.Equal(0, scroll.ScrollableHeight);
                         Assert.Equal(0, Visual(root).OfType<ScrollViewer>().Single(s => s.Content is DockPanel).ScrollableHeight);
                     }
                     foreach (var label in panel.Children.OfType<Grid>().Select(r => (Label)r.Children[0]))
@@ -151,6 +153,12 @@ public sealed class SettingsPresentationTests
                     foreach (var text in Visual(panel).OfType<TextBlock>())
                         Assert.True(text.ActualWidth <= root.ActualWidth + 1);
                     Capture(root, $"settings-{(int)width}-{(int)height}-font{font}-tab{index}.png");
+                    if (index == 0 && scroll.ScrollableHeight > 0)
+                    {
+                        scroll.ScrollToEnd();
+                        root.UpdateLayout();
+                        Capture(root, $"settings-{(int)width}-{(int)height}-font{font}-general-options-scrolled.png");
+                    }
                     if (width == 720 && index == 0)
                     {
                         Capture(root, "settings-general-144dpi-simulated.png", 144);
@@ -288,7 +296,7 @@ public sealed class SettingsPresentationTests
                 var root = new Border { Background = window.Background, Child = content };
                 window.Content = root;
                 Layout(root, 720, 440);
-                var combo = Logical(window).OfType<ComboBox>().Single();
+                var combo = Logical(window).OfType<ComboBox>().Single(c => AutomationProperties.GetName(c) == "Corner");
                 var delay = Logical(window).OfType<TextBox>().Single();
                 Assert.IsType<ScrollViewer>(delay.Template.FindName("PART_ContentHost", delay));
                 Assert.IsType<Popup>(combo.Template.FindName("PART_Popup", combo));
@@ -386,6 +394,41 @@ public sealed class SettingsPresentationTests
     }
 
     private static void ClickRecorder(Button button) => button.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
+
+    [Theory]
+    [InlineData(720, 14)]
+    [InlineData(360, 28)]
+    public void NewGeneralControlsRemainReachableWithLargeTextAndExposeTheirValues(double width, double font)
+        => Sta(() =>
+        {
+            var window = Create();
+            try
+            {
+                window.FontSize = font;
+                var content = (UIElement)window.Content;
+                window.Content = null;
+                var root = new Border { Background = window.Background, Child = content };
+                window.Content = root;
+                Layout(root, width, 440);
+                var outer = Visual(root).OfType<ScrollViewer>().Single(s => s.Content is DockPanel);
+                var dimming = Logical(window).OfType<Slider>().Single();
+                dimming.Value = 78.5;
+                dimming.BringIntoView();
+                root.UpdateLayout();
+                Assert.Contains(Visual(root).OfType<TextBlock>(), t => t.Text == "79% dimming");
+                foreach (var control in new Control[] { dimming, NamedButton(window, "Reset settings") })
+                {
+                    control.BringIntoView();
+                    root.UpdateLayout();
+                    var point = control.TranslatePoint(new Point(), outer);
+                    Assert.InRange(point.Y, 0, outer.ViewportHeight);
+                    Assert.True(point.Y + control.ActualHeight <= outer.ViewportHeight + 1);
+                    Assert.True(control.IsEnabled && control.Focusable);
+                    Capture(root, $"settings-{(int)width}-font{font}-{(control is Slider ? "dimming" : "reset")}-reachable-offscreen.png");
+                }
+            }
+            finally { window.Close(); }
+        });
 
     [Fact]
     public void EnlargedTextDelayErrorKeepsAnEditableFieldInTheScrollableViewport()

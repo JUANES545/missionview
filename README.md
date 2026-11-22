@@ -41,6 +41,6 @@ Set either shortcut in **Settings → Shortcuts**. App Exposé follows `Shift` +
 
 ## Make it yours
 
-Right-click the tray icon to open **Settings**. Choose whether to start with Windows, record shortcuts, or enable a hot corner with your preferred corner and delay. Choose **Save** to apply your changes. Check for updates from Settings or the tray; MissionView asks before starting the installer.
+Right-click the tray icon to open **Settings**. Choose startup, shortcuts, hot corners, preview size, background dimming and a White, Blue or Mint selection border (White by default). Show the overview on all displays or only the display under the pointer; moving between displays requires all displays. Hide minimized windows from App Exposé or reduce animations. **Reset settings** loads defaults for review; **Save** applies changes and **Cancel** discards them. Check for updates from Settings or the tray; MissionView asks before starting the installer.
 
 [MIT](LICENSE). Based on [miguelo96/WindowScatter](https://github.com/miguelo96/WindowScatter), via [RuoChen5251/WindowScatter](https://github.com/RuoChen5251/WindowScatter). Original copyright notices remain in LICENSE.

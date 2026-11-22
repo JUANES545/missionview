@@ -22,12 +22,13 @@ public sealed class SettingsWindowTests
                 Assert.False(window.IsVisible);
                 Assert.Null(UIElementAutomationPeer.CreatePeerForElement(Descendants(window).OfType<Image>().Single()));
                 var controls = Descendants(window).OfType<Control>().ToArray();
-                Assert.Single(controls.OfType<ComboBox>());
-                Assert.Equal(new[] { "Overview shortcut: Win+F12", "App Exposé shortcut: Win+Shift+F12", "Corner", "Delay (milliseconds)" },
+                Assert.Equal(4, controls.OfType<ComboBox>().Count());
+                Assert.Equal(new[] { "Selection border", "Overview displays", "Thumbnail size", "Background dimming", "Reset settings",
+                    "Overview shortcut: Win+F12", "App Exposé shortcut: Win+Shift+F12", "Corner", "Delay (milliseconds)" },
                     controls.Where(c => !string.IsNullOrEmpty(AutomationProperties.GetName(c)) &&
                         !AutomationProperties.GetAutomationId(c).EndsWith(" help")).Select(AutomationProperties.GetName));
                 Assert.Equal("Win+F12", Button(window, "Win+F12").Content);
-                Assert.False(controls.OfType<ComboBox>().Single().IsEnabled);
+                Assert.False(controls.OfType<ComboBox>().Single(c => AutomationProperties.GetName(c) == "Corner").IsEnabled);
                 TextBox(window, "Delay (milliseconds)").Text = "250";
                 Button(window, "Save").RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
                 Assert.NotNull(saved);
@@ -37,6 +38,106 @@ public sealed class SettingsWindowTests
                 Assert.Equal("Win+F12", saved.Hotkey);
                 Assert.False(saved.EnableHotCorners);
                 Assert.Equal(0.63, source.AnimationSpeed);
+                Assert.Equal("White", saved.SelectionBorderColor);
+            }
+            finally { window.Close(); }
+        });
+
+    [Fact]
+    public void PresentationPreferencesSaveReopenAndCancelWithoutChangingTheSourceUntilSave()
+        => RunSta(() =>
+        {
+            var source = new AppSettings();
+            AppSettings? saved = null;
+            var window = new SettingsWindow(source, candidate =>
+            {
+                saved = candidate;
+                source.CopyFrom(candidate);
+                return true;
+            }, new TextBlock(), () => true);
+            try
+            {
+                var colors = Combo(window, "Selection border");
+                Assert.Equal(new[] { "White", "Blue", "Mint" }, colors.Items.Cast<ComboBoxItem>().Select(i => i.Content));
+                var peer = UIElementAutomationPeer.CreatePeerForElement(colors)!;
+                Assert.Equal("Selection border", peer.GetName());
+                Assert.Contains("High contrast", peer.GetHelpText());
+                Assert.NotNull(peer.GetPattern(PatternInterface.Selection));
+                Assert.NotNull(peer.GetPattern(PatternInterface.ExpandCollapse));
+                var slider = Descendants(window).OfType<Slider>().Single();
+                var sliderPeer = UIElementAutomationPeer.CreatePeerForElement(slider)!;
+                Assert.Equal("Background dimming", sliderPeer.GetName());
+                Assert.Contains("percent", sliderPeer.GetHelpText());
+                var range = Assert.IsAssignableFrom<System.Windows.Automation.Provider.IRangeValueProvider>(
+                    sliderPeer.GetPattern(PatternInterface.RangeValue));
+                Assert.Equal(0, range.Minimum);
+                Assert.Equal(100, range.Maximum);
+                range.SetValue(80);
+                Assert.Equal(80, slider.Value);
+                colors.SelectedIndex = 1;
+                Combo(window, "Overview displays").SelectedIndex = 1;
+                Combo(window, "Thumbnail size").SelectedIndex = 2;
+                Check(window, "Show minimized windows in App Exposé").IsChecked = false;
+                Check(window, "Reduce animations").IsChecked = true;
+                Assert.Equal("White", source.SelectionBorderColor);
+                Button(window, "Save").RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+                Assert.Equal("Blue", saved!.SelectionBorderColor);
+                Assert.Equal("Current", saved.OverviewMonitorScope);
+                Assert.Equal("Large", saved.ThumbnailSize);
+                Assert.Equal(80, saved.BackgroundDimming);
+                Assert.False(saved.ShowMinimizedWindows);
+                Assert.True(saved.ReduceAnimations);
+            }
+            finally { window.Close(); }
+            var reopened = new SettingsWindow(source, _ => throw new Exception("Cancel applied preferences"), new TextBlock(), () => true);
+            try
+            {
+                Assert.Equal("Blue", ((ComboBoxItem)Combo(reopened, "Selection border").SelectedItem).Tag);
+                Assert.Equal("Current", ((ComboBoxItem)Combo(reopened, "Overview displays").SelectedItem).Tag);
+                Assert.Equal("Large", ((ComboBoxItem)Combo(reopened, "Thumbnail size").SelectedItem).Tag);
+                Assert.Equal(80, Descendants(reopened).OfType<Slider>().Single().Value);
+                Combo(reopened, "Selection border").SelectedIndex = 2;
+                Button(reopened, "Cancel").RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+                Assert.Equal("Blue", source.SelectionBorderColor);
+            }
+            finally { reopened.Close(); }
+        });
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ResetRequiresConfirmationAndOnlyAppliesDefaultsOnSave(bool save)
+        => RunSta(() =>
+        {
+            var source = new AppSettings { SelectionBorderColor = "Mint", OverviewMonitorScope = "Current",
+                ThumbnailSize = "Large", BackgroundDimming = 80, ReduceAnimations = true, ShowMinimizedWindows = false,
+                RunOnStartup = true, Hotkey = "Ctrl+F12", Renderer = "legacy", AnimationSpeed = .63 };
+            string before = System.Text.Json.JsonSerializer.Serialize(source);
+            bool confirm = false;
+            int calls = 0;
+            var window = new SettingsWindow(source, candidate => { calls++; source.CopyFrom(candidate); return true; },
+                new TextBlock(), () => true, () => confirm);
+            try
+            {
+                var reset = Button(window, "Reset settings");
+                reset.RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+                Assert.Equal("Mint", ((ComboBoxItem)Combo(window, "Selection border").SelectedItem).Tag);
+                confirm = true;
+                Button(window, "Ctrl+F12").RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+                Assert.True(window.IsRecordingShortcut);
+                reset.RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+                Assert.False(window.IsRecordingShortcut);
+                Assert.Equal("White", ((ComboBoxItem)Combo(window, "Selection border").SelectedItem).Tag);
+                Assert.Equal("All", ((ComboBoxItem)Combo(window, "Overview displays").SelectedItem).Tag);
+                Assert.Equal("Standard", ((ComboBoxItem)Combo(window, "Thumbnail size").SelectedItem).Tag);
+                Assert.False(Check(window, "Start with Windows").IsChecked);
+                Assert.False(Check(window, "Reduce animations").IsChecked);
+                Assert.True(Check(window, "Show minimized windows in App Exposé").IsChecked);
+                Assert.Equal(before, System.Text.Json.JsonSerializer.Serialize(source));
+                Button(window, save ? "Save" : "Cancel").RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+                Assert.Equal(save ? 1 : 0, calls);
+                Assert.Equal(save ? System.Text.Json.JsonSerializer.Serialize(new AppSettings()) : before,
+                    System.Text.Json.JsonSerializer.Serialize(source));
             }
             finally { window.Close(); }
         });
@@ -75,11 +176,17 @@ public sealed class SettingsWindowTests
             try
             {
                 TextBox(window, "Delay (milliseconds)").Text = "750";
+                Combo(window, "Selection border").SelectedIndex = 1;
+                Combo(window, "Thumbnail size").SelectedIndex = 2;
+                Descendants(window).OfType<Slider>().Single().Value = 90;
                 Button(window, "Save").RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
                 Assert.Equal(1, calls);
                 Assert.False(closed);
                 Assert.Equal("Win+Shift+F12", source.Hotkey);
                 Assert.Equal(source.HotCornerDelay.ToString(), TextBox(window, "Delay (milliseconds)").Text);
+                Assert.Equal("White", ((ComboBoxItem)Combo(window, "Selection border").SelectedItem).Tag);
+                Assert.Equal("Standard", ((ComboBoxItem)Combo(window, "Thumbnail size").SelectedItem).Tag);
+                Assert.Equal(source.BackgroundDimming, Descendants(window).OfType<Slider>().Single().Value);
                 Button(window, "Cancel").RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
                 Assert.True(closed);
                 Assert.Equal(1, calls);
@@ -256,6 +363,8 @@ public sealed class SettingsWindowTests
         });
 
     private static Button Button(Window window, string content) => Descendants(window).OfType<Button>().Single(b => Equals(b.Content, content));
+    private static ComboBox Combo(Window window, string name) => Descendants(window).OfType<ComboBox>().Single(c => AutomationProperties.GetName(c) == name);
+    private static CheckBox Check(Window window, string content) => Descendants(window).OfType<CheckBox>().Single(c => Equals(c.Content, content));
     private static TextBox TextBox(Window window, string name) => Descendants(window).OfType<TextBox>().Single(b => AutomationProperties.GetName(b) == name);
     private static IEnumerable<DependencyObject> Descendants(DependencyObject parent)
     {

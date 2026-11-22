@@ -10,6 +10,12 @@ namespace WindowScatter
         public string HotCornerPosition { get; set; } = "TopLeft";
         public int HotCornerDelay { get; set; } = 500;
         public double AnimationSpeed { get; set; } = 0.25;
+        public string SelectionBorderColor { get; set; } = "White";
+        public string OverviewMonitorScope { get; set; } = "All";
+        public bool ShowMinimizedWindows { get; set; } = true;
+        public string ThumbnailSize { get; set; } = "Standard";
+        public double BackgroundDimming { get; set; } = 160d / 255 * 100;
+        public bool ReduceAnimations { get; set; }
 
         /// <summary>Launch automatically at logon (HKCU Run key). Applied on startup.</summary>
         public bool RunOnStartup { get; set; } = false;
@@ -28,6 +34,14 @@ namespace WindowScatter
                 throw new InvalidDataException("Settings contain an invalid delay or animation speed.");
             if (Renderer == null || !new[] { "auto", "dcomp", "legacy" }.Contains(Renderer, StringComparer.OrdinalIgnoreCase))
                 throw new InvalidDataException("Settings contain an unsupported renderer.");
+            if (SelectionBorderColor == null || !new[] { "White", "Blue", "Mint" }.Contains(SelectionBorderColor, StringComparer.OrdinalIgnoreCase))
+                throw new InvalidDataException("Settings contain an unsupported selection border color.");
+            if (OverviewMonitorScope is not ("All" or "Current"))
+                throw new InvalidDataException("Settings contain an unsupported overview monitor scope.");
+            if (ThumbnailSize is not ("Compact" or "Standard" or "Large"))
+                throw new InvalidDataException("Settings contain an unsupported thumbnail size.");
+            if (!double.IsFinite(BackgroundDimming) || BackgroundDimming < 0 || BackgroundDimming > 100)
+                throw new InvalidDataException("Background dimming must be between 0 and 100 percent.");
         }
 
         internal AppSettings Copy() => (AppSettings)MemberwiseClone();
@@ -40,9 +54,17 @@ namespace WindowScatter
             HotCornerPosition = source.HotCornerPosition;
             HotCornerDelay = source.HotCornerDelay;
             AnimationSpeed = source.AnimationSpeed;
+            SelectionBorderColor = source.SelectionBorderColor;
+            OverviewMonitorScope = source.OverviewMonitorScope;
+            ShowMinimizedWindows = source.ShowMinimizedWindows;
+            ThumbnailSize = source.ThumbnailSize;
+            BackgroundDimming = source.BackgroundDimming;
+            ReduceAnimations = source.ReduceAnimations;
             RunOnStartup = source.RunOnStartup;
             Renderer = source.Renderer;
         }
+
+        internal bool AllowsMotion(bool systemAnimation) => systemAnimation && !ReduceAnimations;
 
     }
 }

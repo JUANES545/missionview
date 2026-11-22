@@ -94,7 +94,8 @@ namespace WindowScatter
         private Dictionary<IntPtr, List<WindowInfo>> EnumerateOverviewWindows()
         {
             appExposeRequest?.BeginEnumeration();
-            return windowEnumerator.EnumerateByMonitor(monitors, appExposeRequest);
+            return windowEnumerator.EnumerateByMonitor(monitors, appExposeRequest, showMinimizedWindows,
+                views.Select(v => v.monitor).ToArray());
         }
 
         [DllImport("user32.dll", SetLastError = true)]

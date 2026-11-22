@@ -11,6 +11,225 @@ using Xunit;
 public class MainWindowNavigationTests
 {
     [Theory]
+    [InlineData("Compact", 1.5)]
+    [InlineData("Standard", 2)]
+    [InlineData("Large", 1.25)]
+    public void ActualDwmRebuildUsesRequestedSizeAndDimmingWithoutDesynchronizingHitTargets(string size, double dpi)
+        => RunSta(() =>
+    {
+        using var app = new MainWindow();
+        var settings = new AppSettings { ThumbnailSize = size, SelectionBorderColor = "Blue", ReduceAnimations = true };
+        app.OpenDisplays([new() { Handle = new(1), Width = 1920, Height = 1080, DpiScale = dpi }], settings, new(1));
+        var original = Assert.Single(app.RegisterNormalWindows("Full readable title"));
+        var normal = new WindowInfo { Handle = original.WindowHandle, Identity = original.Identity, Title = "Full readable title",
+            OriginalRect = new PhysicalWindowRect { Left = 100, Top = 100, Right = 700, Bottom = 500 } };
+        app.Rebuild(false, normal);
+        var thumb = Assert.Single(app.Thumbs);
+        var expected = Assert.Single(new WindowLayoutCalculator().CalculateLayouts([normal], 1920, 1080, dpi, size));
+        Assert.NotEqual(IntPtr.Zero, thumb.ThumbnailHandle);
+        Assert.Equal((expected.X, expected.Y, expected.Width, expected.Height),
+            (thumb.CurrentX, thumb.CurrentY, thumb.CurrentWidth, thumb.CurrentHeight));
+        Assert.Equal(expected.Width / dpi, thumb.ClickBorder.Width, 8);
+        Assert.Equal(expected.Height / dpi, thumb.ClickBorder.Height, 8);
+        Assert.Equal(expected.X / dpi, Canvas.GetLeft(thumb.ClickBorder), 8);
+        Assert.Equal(expected.Y / dpi, Canvas.GetTop(thumb.ClickBorder), 8);
+        Assert.Equal(thumb.ClickBorder.Width + 10, thumb.HighlightBorder.Width);
+        Assert.Equal(thumb.ClickBorder.Width, thumb.TitleLabel.Width);
+        Assert.Equal(13, thumb.TitleLabel.FontSize);
+        app.RefreshPresentation(false, true);
+        Assert.Equal(Color.FromArgb(160, 32, 37, 34), ((SolidColorBrush)app.Backdrop).Color);
+        Assert.Null(thumb.HighlightBorder.Effect);
+        Assert.Null(thumb.TitleLabel.Effect);
+        settings.BackgroundDimming = 0;
+        app.RefreshPresentation(false, false);
+        Assert.Equal(0, ((SolidColorBrush)app.Backdrop).Color.A);
+        settings.BackgroundDimming = 100;
+        app.RefreshPresentation(false, false);
+        Assert.Equal(255, ((SolidColorBrush)app.Backdrop).Color.A);
+        app.RefreshPresentation(true, true);
+        Assert.Same(SystemColors.WindowBrush, app.Backdrop);
+        Assert.Same(SystemColors.HighlightBrush, thumb.HighlightBorder.BorderBrush);
+        settings.BackgroundDimming = 80;
+        settings.ReduceAnimations = false;
+        app.RefreshPresentation(false, false);
+        Assert.Equal(204, ((SolidColorBrush)app.Backdrop).Color.A);
+        Assert.Null(thumb.TitleLabel.Effect);
+        Assert.Equal(Color.FromRgb(0, 120, 215), ((SolidColorBrush)thumb.HighlightBorder.BorderBrush).Color);
+        app.Pick(normal.Handle);
+        Assert.Equal(normal.Handle, app.Selected);
+        Assert.Equal(0, app.ActivationRequests);
+    });
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public void ActualRebuildPreservesNormalOnlyOverviewAndOnlyShowsAppExposeShelfWhenEnabled(
+        bool appExpose, bool showMinimized) => RunSta(() =>
+    {
+        using var app = new MainWindow();
+        var original = Assert.Single(app.RegisterNormalWindows("Normal window"));
+        var normal = new WindowInfo
+        {
+            Handle = original.WindowHandle, Identity = original.Identity, Title = "Normal window",
+            OriginalRect = new PhysicalWindowRect { Left = 100, Top = 100, Right = 700, Bottom = 500 }
+        };
+        var minimized = app.MinimizedInfo("Minimized window");
+        if (appExpose) app.UseAppExpose(normal.Identity);
+        bool shelfExpected = appExpose && showMinimized;
+        app.Rebuild(showMinimized, normal, minimized);
+        Assert.Equal(shelfExpected, app.Strip != null);
+        Assert.Equal(shelfExpected ? 2 : 1, app.DisplayedWindowCount);
+        Assert.NotEqual(IntPtr.Zero, Assert.Single(app.Thumbs).ThumbnailHandle);
+        Assert.Equal(Visibility.Hidden, app.EmptyState.Visibility);
+        app.Tab(1);
+        Assert.Equal(normal.Handle, app.Selected);
+        app.Tab(1);
+        Assert.Equal(shelfExpected ? minimized.Handle : normal.Handle, app.Selected);
+        if (!shelfExpected)
+        {
+            Assert.Equal(1000, app.ContentHeight);
+            Assert.Empty(Assert.Single(app.Snapshot()).MinimizedContent);
+            Assert.Empty(Assert.Single(app.Snapshot()).MinimizedVisible);
+            Assert.Throws<InvalidOperationException>(() => app.Pick(minimized.Handle));
+        }
+        Assert.Equal(0, app.ActivationRequests);
+        Assert.True(minimized.WasMinimized);
+        app.Rebuild(showMinimized, minimized);
+        app.Tab(1);
+        Assert.Equal(shelfExpected ? minimized.Handle : IntPtr.Zero, app.Selected);
+        Assert.Equal(shelfExpected ? Visibility.Hidden : Visibility.Visible, app.EmptyState.Visibility);
+        if (!shelfExpected)
+            Assert.Equal(appExpose ? "No windows from this application on this display." : "No windows on this display.",
+                app.EmptyState.Text);
+        Assert.Equal(0, app.ActivationRequests);
+    });
+
+    [Theory]
+    [InlineData("All", 1)]
+    [InlineData("All", 2)]
+    [InlineData("Current", 1)]
+    [InlineData("Current", 2)]
+    public void ActualOpeningCreatesOnlyScopedViewsAndSettingsEditsDoNotChangeTheOpenSnapshot(string scope, int pointer)
+        => RunSta(() =>
+    {
+        using var app = new MainWindow();
+        var topology = new MonitorHelper.MonitorBounds[]
+        {
+            new() { Handle = new(1), Left = -1920, Top = -240, Width = 1920, Height = 1080, DpiScale = 1.5 },
+            new() { Handle = new(2), Width = 2560, Height = 1440, DpiScale = 2 }
+        };
+        var settings = new AppSettings { OverviewMonitorScope = scope, ShowMinimizedWindows = false };
+        app.OpenDisplays(topology, settings, new(pointer));
+        var before = app.Snapshot();
+        Assert.Equal(scope == "All" ? 2 : 1, before.Count);
+        Assert.Equal(new IntPtr(pointer), app.CurrentDisplay);
+        Assert.Equal(2, app.Topology.Count);
+        Assert.True(MonitorHelper.SameTopology(topology, app.Topology));
+        Assert.All(before, d =>
+        {
+            var m = topology.Single(m => m.Handle == d.Display);
+            Assert.Equal(new PreviewBounds(m.Left, m.Top, m.Width, m.Height), d.Bounds);
+        });
+        settings.OverviewMonitorScope = scope == "All" ? "Current" : "All";
+        settings.ShowMinimizedWindows = true;
+        Assert.Equal(before.Select(d => d.Display), app.Snapshot().Select(d => d.Display));
+        Assert.False(app.SessionShowsMinimized);
+        var selected = app.AddThumb(10, 100, 100, 300, 200);
+        app.Tab(1);
+        Assert.Equal(selected.WindowHandle, app.Selected);
+        if (scope == "Current")
+            Assert.Throws<InvalidOperationException>(() => app.Pick(new IntPtr(99)));
+    });
+
+    [Theory]
+    [InlineData(-1920, -240, 1920, 1080, 1.5)]
+    [InlineData(2560, 0, 2560, 1440, 2)]
+    public void ActualRebuildHidesShelfTargetsAndReservedSpaceWithoutActivationThenRecreatesThem(
+        int x, int y, int width, int height, double dpi) => RunSta(() =>
+    {
+        using var app = new MainWindow(null, x, y, width, height, dpi);
+        var minimized = app.MinimizedInfo("A full minimized window title");
+        app.UseAppExpose(minimized.Identity);
+        app.Rebuild(true, minimized);
+        var oldStrip = app.Strip!;
+        Assert.NotNull(oldStrip);
+        Assert.True(app.ContentHeight < height);
+        Assert.Equal(1, app.DisplayedWindowCount);
+        Assert.Equal(Visibility.Hidden, app.EmptyState.Visibility);
+        app.Tab(1);
+        Assert.Equal(minimized.Handle, app.Selected);
+        var peer = System.Windows.Automation.Peers.UIElementAutomationPeer.CreatePeerForElement(oldStrip);
+        var oldEntry = Assert.Single(peer.GetChildren());
+        Assert.Equal(minimized.Title + ", minimized", oldEntry.GetName());
+
+        app.Rebuild(false, minimized);
+        Assert.Equal(IntPtr.Zero, app.Selected);
+        Assert.Empty(((System.Windows.Automation.Provider.ISelectionProvider)peer.GetPattern(
+            System.Windows.Automation.Peers.PatternInterface.Selection)).GetSelection());
+        Assert.Null(app.Strip);
+        Assert.Null(oldStrip.Parent);
+        Assert.Equal(height, app.ContentHeight);
+        Assert.Equal(0, app.DisplayedWindowCount);
+        Assert.Empty(Assert.Single(app.Snapshot()).MinimizedContent);
+        Assert.Empty(Assert.Single(app.Snapshot()).MinimizedVisible);
+        Assert.Equal(Visibility.Visible, app.EmptyState.Visibility);
+        Assert.Equal("No windows from this application on this display.", app.EmptyState.Text);
+        Assert.Throws<InvalidOperationException>(() => ((System.Windows.Automation.Provider.ISelectionItemProvider)
+            oldEntry.GetPattern(System.Windows.Automation.Peers.PatternInterface.SelectionItem)).Select());
+        Assert.Throws<System.Windows.Automation.ElementNotEnabledException>(() => ((System.Windows.Automation.Provider.IInvokeProvider)
+            oldEntry.GetPattern(System.Windows.Automation.Peers.PatternInterface.Invoke)).Invoke());
+        Assert.Equal(0, app.ActivationRequests);
+        Assert.True(minimized.WasMinimized);
+        app.Tab(1);
+        Assert.Equal(IntPtr.Zero, app.Selected);
+        app.Arrow(1, 0);
+        Assert.Equal(IntPtr.Zero, app.Selected);
+
+        app.Rebuild(true, minimized);
+        app.Tab(1);
+        Assert.NotSame(oldStrip, app.Strip);
+        Assert.Equal(minimized.Handle, app.Selected);
+        Assert.Equal(0, app.ActivationRequests);
+    });
+
+    [Fact]
+    public void ActualRebuildKeepsNormalDwmThumbnailAndUsesAllHeightWhenShelfIsHidden() => RunSta(() =>
+    {
+        using var app = new MainWindow();
+        var original = Assert.Single(app.RegisterNormalWindows("Normal window"));
+        var normal = new WindowInfo
+        {
+            Handle = original.WindowHandle, Identity = original.Identity, Title = "Normal window",
+            OriginalRect = new PhysicalWindowRect { Left = 100, Top = 100, Right = 700, Bottom = 500 }
+        };
+        var minimized = app.MinimizedInfo("Minimized window");
+        app.UseAppExpose(normal.Identity);
+        app.Rebuild(true, normal, minimized);
+        app.Pick(minimized.Handle);
+        Assert.Equal(2, app.DisplayedWindowCount);
+        app.Rebuild(false, normal, minimized);
+        app.Tab(1);
+        Assert.Equal(normal.Handle, app.Selected);
+        var current = Assert.Single(app.Thumbs);
+        Assert.NotEqual(IntPtr.Zero, current.ThumbnailHandle);
+        var expected = Assert.Single(new WindowLayoutCalculator().CalculateLayouts([normal], 1600, 1000, 1));
+        Assert.Equal(expected.X, current.TargetX, 8);
+        Assert.Equal(expected.Y, current.TargetY, 8);
+        Assert.Equal(expected.Width, current.TargetWidth, 8);
+        Assert.Equal(expected.Height, current.TargetHeight, 8);
+        Assert.Equal(Visibility.Hidden, app.EmptyState.Visibility);
+        Assert.Equal(1, app.DisplayedWindowCount);
+        Assert.Equal(0, app.ActivationRequests);
+        app.Rebuild(false);
+        app.Tab(1);
+        Assert.Empty(app.Thumbs);
+        Assert.Equal(IntPtr.Zero, app.Selected);
+        Assert.Equal(Visibility.Visible, app.EmptyState.Visibility);
+    });
+
+    [Theory]
     [InlineData(-5120, -300, 5120, 1440, 1.25)]
     [InlineData(1920, 200, 3440, 1440, 1.5)]
     [InlineData(-1200, -1600, 1200, 1600, 2)]
@@ -367,17 +586,23 @@ namespace WindowScatter
         private double dragGrabX, dragGrabY;
         private DwmDragPreview? dragPreview;
         private DragPreviewGeometry? dragGeometry;
-        private int enumeratedWindowCount => ViewThumbs.Count();
+        private int enumeratedWindowCount;
         private readonly OverviewThumbnailCanvas canvas = new();
         private readonly List<Window> sources = [];
         private readonly WindowAnimationManager animationManager;
         private ThumbnailManager thumbnailManager;
         private MainWindow? activeView;
-        private MinimizedWindowStrip? minimizedStrip;
-        private readonly MonitorHelper.MonitorBounds monitor;
+        private bool showMinimizedWindows = true;
+        private WindowSwitcher? windowSwitcher;
+        private System.Windows.Controls.Canvas ChromeCanvas => canvas;
+        private readonly TextBlock EmptyMessage = new();
+        private readonly Border DimOverlay = new();
+        private MonitorHelper.MonitorBounds monitor;
+        private List<MonitorHelper.MonitorBounds> monitors = [];
+        private AppSettings settings = new();
         private readonly TextBlock MoveStatus = new();
         private readonly Window chromeWindow = new() { ShowActivated = false };
-        private AppExposeRequest? appExposeRequest => null;
+        private AppExposeRequest? appExposeRequest;
         private string IdleMoveStatus => "";
         private bool isScatterActive => false;
         private bool isTransitioning => !scatterInteraction.IsOpen;
@@ -391,7 +616,6 @@ namespace WindowScatter
         private double currentDpiScale => monitor.DpiScale;
         private double monitorPixelWidth => monitor.Width;
         private double monitorPixelHeight => monitor.Height;
-        private double OverviewContentHeight => monitorPixelHeight - (minimizedStrip?.Geometry.ReservedHeight ?? 0) * currentDpiScale;
         private readonly List<Exception> errors = [];
         internal List<Exception> Errors => coordinator.errors;
         internal IntPtr Clicked { get; private set; }
@@ -403,15 +627,23 @@ namespace WindowScatter
         internal double ScrollOffset => ((ScrollViewer)((DockPanel)minimizedStrip!.Child).Children[1]).VerticalOffset;
         internal bool PreviewAnimating => views.Any(v => v.animationManager.IsPreviewAnimating);
         internal bool Pending => navigationPending;
+        internal double ContentHeight => OverviewContentHeight;
+        internal TextBlock EmptyState => EmptyMessage;
+        internal int DisplayedWindowCount => enumeratedWindowCount;
+        internal IntPtr CurrentDisplay => monitor.Handle;
+        internal IReadOnlyList<MonitorHelper.MonitorBounds> Topology => monitors;
+        internal bool SessionShowsMinimized => showMinimizedWindows;
         internal IEnumerable<IntPtr> FixtureHandles => sources.Prepend(this).Select(w => new WindowInteropHelper(w).Handle);
 
         internal MainWindow(MainWindow? parent = null, int left = 0, int top = 0, int width = 1600, int height = 1000, double dpi = 1)
         {
             coordinator = parent ?? this;
+            settings = parent?.settings ?? new();
             session = parent?.session ?? new();
             views = parent?.views ?? [];
-            views.Add(this);
-            monitor = new() { Handle = new(views.Count), Left = left, Top = top, Width = width, Height = height, DpiScale = dpi };
+            if (parent == null) views.Add(this);
+            monitor = new() { Handle = new(parent == null ? 1 : views.Count + 1),
+                Left = left, Top = top, Width = width, Height = height, DpiScale = dpi };
             scatterInteraction = session.Interaction;
             previewKey = session.PreviewKey;
             if (parent == null) scatterInteraction.BeginSession(default);
@@ -421,10 +653,43 @@ namespace WindowScatter
             Content = canvas;
             animationManager = new(windowThumbs);
             animationManager.SetMotionEnabled(false);
-            thumbnailManager = new(canvas, windowThumbs, IntPtr.Zero, _ => { }, _ => { });
+            thumbnailManager = new(canvas, windowThumbs, IntPtr.Zero, _ => { }, _ => { },
+                selectionBorderColor: () => settings.SelectionBorderColor, effectsEnabled: () => !settings.ReduceAnimations);
         }
 
-        internal MainWindow AddView(int x, int y, int width, int height, double dpi) => new(this, x, y, width, height, dpi);
+        private void InitializeRendering() { }
+        internal void RefreshPresentation(bool highContrast, bool systemAnimation) => RefreshOverviewPresentation(highContrast, systemAnimation);
+        internal Brush Backdrop => DimOverlay.Background;
+        internal void UseAppExpose(WindowActivationTarget target) =>
+            coordinator.appExposeRequest = AppExposeRequest.Capture(() => target, _ => false,
+                _ => ApplicationIdentity.Create(@"C:\MissionView-fixture.exe", null, null));
+        internal void OpenDisplays(IReadOnlyList<MonitorHelper.MonitorBounds> topology, AppSettings preferences, IntPtr pointer)
+        {
+            settings = preferences;
+            InitializeOverviewViews(topology, pointer);
+        }
+        internal MainWindow AddView(int x, int y, int width, int height, double dpi)
+        {
+            var view = new MainWindow(this, x, y, width, height, dpi);
+            views.Add(view);
+            return view;
+        }
+        internal WindowInfo MinimizedInfo(string title)
+        {
+            var source = new Window
+            {
+                Title = title, Width = 600, Height = 400, Left = -28000, Top = -26000,
+                ShowActivated = false, ShowInTaskbar = false
+            };
+            sources.Add(source);
+            var handle = new WindowInteropHelper(source).EnsureHandle();
+            return new WindowInfo
+            {
+                Handle = handle, Identity = new WindowActivation().Capture(handle),
+                Title = title, WasMinimized = true,
+                OriginalRect = new PhysicalWindowRect { Left = 100, Top = 100, Right = 700, Bottom = 500 }
+            };
+        }
         internal void Active(MainWindow view) => activeView = view;
         internal void Pick(int id) => SelectWindow(new(id));
         internal void Reveal(int id) => SelectWindow(new(id), keyboard: true, revealMinimized: true);
@@ -432,6 +697,14 @@ namespace WindowScatter
         internal void Tab(int direction) => SelectNextWindow(direction);
         internal void Arrow(int dx, int dy) => SelectWindowInDirection(dx, dy);
         internal IReadOnlyList<OverviewDisplaySnapshot> Snapshot() => NavigationSnapshot();
+        internal void Rebuild(bool showMinimized, params WindowInfo[] windows)
+        {
+            coordinator.showMinimizedWindows = showMinimized;
+            RebuildThumbnails([], windows.ToList(), settled: true);
+            canvas.Measure(new Size(monitor.Width / currentDpiScale, monitor.Height / currentDpiScale));
+            canvas.Arrange(new Rect(0, 0, monitor.Width / currentDpiScale, monitor.Height / currentDpiScale));
+            canvas.UpdateLayout();
+        }
         internal void HoverWithoutPointerMovement(IntPtr handle)
         {
             Assert.True(Win32Interop.GetCursorPos(out lastHoverPosition));
@@ -523,7 +796,8 @@ namespace WindowScatter
         internal IReadOnlyList<WindowThumb> RegisterNormalWindows(params string[] titles)
         {
             Show();
-            thumbnailManager = new(canvas, windowThumbs, new WindowInteropHelper(this).Handle, OnWindowClicked, OnWindowHovered);
+            thumbnailManager = new(canvas, windowThumbs, new WindowInteropHelper(this).Handle, OnWindowClicked, OnWindowHovered,
+                selectionBorderColor: () => settings.SelectionBorderColor, effectsEnabled: () => !settings.ReduceAnimations);
             thumbnailManager.ConfigureInput = ConfigureThumbnailAutomation;
             var layouts = titles.Select((title, i) =>
             {
@@ -565,7 +839,6 @@ namespace WindowScatter
             UpdateLayout();
         }
 
-        private IEnumerable<WindowThumb> ViewThumbs => windowThumbs.Concat(minimizedStrip?.Thumbs ?? []);
         private MainWindow? ViewFor(IntPtr handle) => views.FirstOrDefault(v => v.ViewThumbs.Any(t => t.WindowHandle == handle));
         private void OnWindowClicked(IntPtr handle) { ActivationRequests++; Clicked = handle; CancelSession(); }
         private void AbortOverview(Exception error) { Errors.Add(error); CancelSession(); }
