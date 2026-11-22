@@ -9,13 +9,13 @@ public class OverviewHotkeyTests
         public Func<int, OverviewHotkey, bool> Allow = (_, _) => true;
         public Func<int, bool> AllowRelease = _ => true;
         public int Calls;
-        public OverviewHotkeys Create() => new((id, key) =>
+        public OverviewHotkeys Create(Func<bool>? canIntercept = null) => new((id, key) =>
         {
             Calls++;
             if (!Allow(id, key) || Registered.ContainsKey(id) || Registered.Values.Contains(key)) return false;
             Registered.Add(id, key);
             return true;
-        }, id => AllowRelease(id) && Registered.Remove(id));
+        }, id => AllowRelease(id) && Registered.Remove(id), canIntercept);
     }
 
     [Theory]
@@ -85,15 +85,15 @@ public class OverviewHotkeyTests
     }
 
     [Fact]
-    public void StartupDerivedConflictPreservesNormalRecallAndReportsUnavailableAction()
+    public void StartupDerivedConflictWithoutHookRollsBackTheNormalReservation()
     {
         var native = new NativeDouble { Allow = (id, _) => id != OverviewHotkeys.AppExposeId };
         var hotkeys = native.Create();
-        Assert.True(hotkeys.TryInitialize("Win+F12", out var warning));
-        Assert.Contains("App Expose is unavailable", warning);
-        Assert.True(hotkeys.MatchesNormal(0x7B, 8));
+        Assert.False(hotkeys.TryInitialize("Win+F12", out var warning));
+        Assert.Contains("keyboard handler", warning);
+        Assert.False(hotkeys.MatchesNormal(0x7B, 8));
         Assert.False(hotkeys.MatchesAppExpose(0x7B, 12));
-        Assert.Single(native.Registered);
+        Assert.Empty(native.Registered);
     }
 
     [Fact]
@@ -135,40 +135,41 @@ public class OverviewHotkeyTests
     }
 
     [Fact]
-    public void ReservedSystemBindingKeepsOnlyInheritedHookActionIncludingUnchangedSaveAndRollback()
+    public void OccupiedPairUsesTheActiveHookOnStartupUnchangedSaveAndReconfiguration()
     {
         var native = new NativeDouble { Allow = (_, _) => false };
-        var hotkeys = native.Create();
+        var hotkeys = native.Create(() => true);
         Assert.True(hotkeys.TryInitialize("Win+W", out var warning));
-        Assert.Contains("preserved", warning);
+        Assert.Empty(warning);
         Assert.True(hotkeys.MatchesNormal('W', 8));
-        Assert.False(hotkeys.MatchesAppExpose('W', 12));
+        Assert.True(hotkeys.MatchesAppExpose('W', 12));
         Assert.Empty(native.Registered);
         Assert.True(hotkeys.TryApply("Win+W", false, out var sameWarning));
-        Assert.NotEmpty(sameWarning);
-        Assert.False(hotkeys.TryApply("Win+F1", false, out _));
-        Assert.True(hotkeys.MatchesNormal('W', 8));
+        Assert.Empty(sameWarning);
+        Assert.True(hotkeys.TryApply("Win+F1", false, out _));
+        Assert.True(hotkeys.MatchesNormal(0x70, 8));
+        Assert.True(hotkeys.TryApply("Win+W", false, out _));
         native.Allow = (_, _) => true;
         Assert.True(hotkeys.TryApply("Win+F1", false, out _));
         Assert.Equal(2, native.Registered.Count);
         Assert.True(hotkeys.TryApply("Win+W", false, out var rollbackWarning));
-        Assert.NotEmpty(rollbackWarning);
+        Assert.Empty(rollbackWarning);
         Assert.True(hotkeys.MatchesNormal('W', 8));
-        Assert.Empty(native.Registered);
+        Assert.Equal(2, native.Registered.Count);
     }
 
     [Fact]
-    public void InheritedNormalOnlyReservationDoesNotBlockSavingOtherPreferences()
+    public void InheritedConflictUsesHookAndDoesNotReprobeOnUnchangedSave()
     {
         var native = new NativeDouble { Allow = (id, _) => id != OverviewHotkeys.AppExposeId };
-        var hotkeys = native.Create();
+        var hotkeys = native.Create(() => true);
         Assert.True(hotkeys.TryInitialize("Win+F12", out _));
         int calls = native.Calls;
         Assert.True(hotkeys.TryApply("Win+F12", false, out var warning));
-        Assert.NotEmpty(warning);
+        Assert.Empty(warning);
         Assert.Equal(calls, native.Calls);
         Assert.True(hotkeys.MatchesNormal(0x7B, 8));
-        Assert.False(hotkeys.MatchesAppExpose(0x7B, 12));
+        Assert.True(hotkeys.MatchesAppExpose(0x7B, 12));
     }
 
     [Theory]

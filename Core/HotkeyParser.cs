@@ -12,7 +12,7 @@ namespace WindowScatter
 
             foreach (var part in parts)
             {
-                var key = part.Trim().ToLower();
+                var key = part.Trim().ToLowerInvariant();
 
                 switch (key)
                 {
@@ -45,12 +45,12 @@ namespace WindowScatter
 
         private static int GetVirtualKeyCode(string keyName)
         {
-            keyName = keyName.ToLower();
+            keyName = keyName.ToLowerInvariant();
 
-            if (keyName.Length == 1 && char.IsLetter(keyName[0]))
-                return char.ToUpper(keyName[0]);
+            if (keyName.Length == 1 && keyName[0] is >= 'a' and <= 'z')
+                return char.ToUpperInvariant(keyName[0]);
 
-            if (keyName.Length == 1 && char.IsDigit(keyName[0]))
+            if (keyName.Length == 1 && keyName[0] is >= '0' and <= '9')
                 return 0x30 + (keyName[0] - '0');
 
             switch (keyName)

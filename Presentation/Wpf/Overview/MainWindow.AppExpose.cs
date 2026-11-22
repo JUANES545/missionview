@@ -23,7 +23,8 @@ namespace WindowScatter
             }
             overviewHotkeys = new OverviewHotkeys(
                 (id, key) => RegisterHotKey(handle, id, key.NativeModifiers | 0x4000, (uint)key.Key),
-                id => UnregisterHotKey(handle, id));
+                id => UnregisterHotKey(handle, id),
+                () => hookID != IntPtr.Zero && !isClosing);
             if (!overviewHotkeys.TryInitialize(settings.Hotkey, settings.AppExposeHotkey, out string error) ||
                 error.Length != 0)
                 Dispatcher.BeginInvoke(new Action(() => ReportShortcutError(error)), DispatcherPriority.Background);
@@ -36,9 +37,10 @@ namespace WindowScatter
         {
             Dispatcher.VerifyAccess();
             if (!IsCoordinator) return coordinator.TryApplyOverviewHotkeys(hotkey, appExposeHotkey, out error);
-            if (overviewHotkeys == null)
+            if (overviewHotkeys == null || hookID == IntPtr.Zero || isClosing)
             {
-                error = "The overview shortcuts are not initialized.";
+                error = "The overview keyboard handler is unavailable. The previous shortcuts are unchanged.";
+                System.Diagnostics.Trace.TraceError(error);
                 return false;
             }
             if (!overviewHotkeys.TryApply(hotkey, appExposeHotkey,
