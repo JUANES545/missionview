@@ -10,6 +10,48 @@ using Xunit;
 
 public sealed class SettingsWindowTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ShortcutPreviewFollowsTheRecorderWithoutApplyingOrHidingSaveFailure(bool appExpose)
+        => RunSta(() =>
+        {
+            var source = new AppSettings { Hotkey = "Win+F12" };
+            AppSettings? attempted = null;
+            var window = new SettingsWindow(source, candidate => { attempted = candidate; return false; }, new TextBlock(), () => true);
+            try
+            {
+                var recorder = Descendants(window).OfType<Button>().Single(b =>
+                    AutomationProperties.GetAutomationId(b) == (appExpose ? "App Exposé shortcut" : "Overview shortcut"));
+                var generic = Descendants(window).OfType<TextBlock>().Where(t => Equals(t.Tag, "ShortcutPreview") && t.Visibility == Visibility.Visible);
+                Assert.Equal("Uses this shortcut for MissionView while it is running.", Assert.Single(generic).Text);
+                recorder.RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+                Assert.DoesNotContain(Descendants(window).OfType<TextBlock>(), t => Equals(t.Tag, "ShortcutPreview") && t.Visibility == Visibility.Visible);
+                window.RecordVirtualKey('W', 8, true);
+                var preview = Assert.Single(Descendants(window).OfType<TextBlock>(), t => Equals(t.Tag, "ShortcutPreview") && t.Visibility == Visibility.Visible);
+                Assert.Equal(appExpose
+                    ? "Opens App Expose instead of Widgets while MissionView is running."
+                    : "Opens MissionView instead of Widgets while MissionView is running.", preview.Text);
+                Assert.Same(recorder.Parent, preview.Parent);
+                Assert.Equal(AutomationLiveSetting.Polite, AutomationProperties.GetLiveSetting(preview));
+                Assert.Null(recorder.ToolTip);
+                Assert.Equal("Win+F12", source.Hotkey);
+                Assert.Null(source.AppExposeHotkey);
+                Assert.Null(attempted);
+                Button(window, "Save").RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+                Assert.NotNull(attempted);
+                Assert.Equal("Win+W", appExpose ? attempted.AppExposeHotkey : attempted.Hotkey);
+                Assert.Equal("Win+F12", source.Hotkey);
+                Assert.Null(source.AppExposeHotkey);
+                Assert.Contains(Descendants(window).OfType<TextBlock>(), t => t.Text.StartsWith("Settings were not applied."));
+                Assert.Equal("Uses this shortcut for MissionView while it is running.",
+                    Assert.Single(Descendants(window).OfType<TextBlock>(), t => Equals(t.Tag, "ShortcutPreview") && t.Visibility == Visibility.Visible).Text);
+                Button(window, "Cancel").RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+                Assert.Equal("Win+F12", source.Hotkey);
+            }
+            finally { window.Close(); }
+        });
+
     [Fact]
     public void SettingsExposeOnlyWorkingPreferencesWithNamesAndPreserveUnexposedRenderer()
         => RunSta(() =>
@@ -216,7 +258,7 @@ public sealed class SettingsWindowTests
                 window.RecordShortcut(Key.F9, ModifierKeys.Control | ModifierKeys.Alt);
                 Assert.False(window.IsRecordingShortcut);
                 Assert.Equal("Ctrl+Alt+F9", button.Content);
-                var hint = Descendants(window).OfType<TextBlock>().Single(text => AutomationProperties.GetLiveSetting(text) == AutomationLiveSetting.Polite);
+                var hint = Descendants(window).OfType<TextBlock>().Single(text => AutomationProperties.GetAutomationId(text) == "App Exposé availability");
                 Assert.Contains("Save", hint.Text);
                 Assert.Equal("Ctrl+Alt+Shift+F9", Descendants(window).OfType<Button>()
                     .Single(b => AutomationProperties.GetAutomationId(b) == "App Exposé shortcut").Content);
@@ -238,7 +280,7 @@ public sealed class SettingsWindowTests
                 window.RecordShortcut(Key.F12, ModifierKeys.Windows | ModifierKeys.Shift);
                 Assert.False(window.IsRecordingShortcut);
                 Assert.Equal("Win+Shift+F12", button.Content);
-                var hint = Descendants(window).OfType<TextBlock>().Single(text => AutomationProperties.GetLiveSetting(text) == AutomationLiveSetting.Polite);
+                var hint = Descendants(window).OfType<TextBlock>().Single(text => AutomationProperties.GetAutomationId(text) == "App Exposé availability");
                 Assert.Contains("unavailable", hint.Text);
                 button.RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
                 window.RecordShortcut(Key.F9, ModifierKeys.Control);
@@ -303,7 +345,7 @@ public sealed class SettingsWindowTests
         {
             bool allowReservation = false;
             var hotkeys = new OverviewHotkeys((_, _) => allowReservation, _ => true);
-            Assert.True(hotkeys.TryInitialize("Win+W", out string warning));
+            Assert.False(hotkeys.TryInitialize("Win+W", out string warning));
             Assert.NotEmpty(warning);
             var source = new AppSettings { Hotkey = "Win+W" };
             var window = new SettingsWindow(source, candidate =>
@@ -314,7 +356,7 @@ public sealed class SettingsWindowTests
             }, new TextBlock(), () => hotkeys.AppExpose != null);
             try
             {
-                var hint = Descendants(window).OfType<TextBlock>().Single(text => AutomationProperties.GetLiveSetting(text) == AutomationLiveSetting.Polite);
+                var hint = Descendants(window).OfType<TextBlock>().Single(text => AutomationProperties.GetAutomationId(text) == "App Exposé availability");
                 Assert.Contains("unavailable", hint.Text);
                 Assert.Contains("reserve", hint.Text);
                 Button(window, "Win+W").RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));

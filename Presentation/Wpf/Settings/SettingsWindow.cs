@@ -1,10 +1,14 @@
 using System.Globalization;
+using System.Diagnostics;
+using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Automation.Peers;
 using System.Windows.Controls;
 using System.Windows.Data;
+using System.Windows.Documents;
 using System.Windows.Input;
+using System.Windows.Interop;
 using System.Windows.Media;
 
 namespace WindowScatter;
@@ -15,8 +19,13 @@ internal sealed class SettingsWindow : Window
     private readonly Func<AppSettings, bool> apply;
     private readonly Func<bool> isAppExposeAvailable;
     private readonly Func<bool> confirmReset;
+    private readonly Action<Uri> openProjectLink;
     private readonly Button shortcut = new();
     private readonly Button appExposeShortcut = new();
+    private readonly TextBlock shortcutPreview = new() { TextWrapping = TextWrapping.Wrap, Visibility = Visibility.Collapsed,
+        Margin = new Thickness(12, 0, 12, 12), Tag = "ShortcutPreview" };
+    private readonly TextBlock appExposePreview = new() { TextWrapping = TextWrapping.Wrap, Visibility = Visibility.Collapsed,
+        Margin = new Thickness(12, 0, 12, 12), Tag = "ShortcutPreview" };
     private Button? activeRecorder;
     private readonly CheckBox hotCorners = new() { Content = "Enable hot corners" };
     private readonly ComboBox position = new();
@@ -45,17 +54,22 @@ internal sealed class SettingsWindow : Window
     internal int RecordingGeneration { get; private set; }
 
     internal SettingsWindow(AppSettings source, Func<AppSettings, bool> apply, UIElement updates, Func<bool> isAppExposeAvailable,
-        Func<bool>? confirmReset = null)
+        Func<bool>? confirmReset = null, Action<Uri>? openProjectLink = null)
     {
         this.source = source;
         this.apply = apply;
         this.isAppExposeAvailable = isAppExposeAvailable;
+        this.openProjectLink = openProjectLink ?? (address =>
+        {
+            using var process = Process.Start(new ProcessStartInfo(address.AbsoluteUri) { UseShellExecute = true });
+        });
         this.confirmReset = confirmReset ?? (() => MessageBox.Show(this,
             "Reset all settings to their defaults?\n\nChanges apply only when you save.", "Reset settings",
             MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.No) == MessageBoxResult.Yes);
         hotkey = source.Hotkey;
         appExposeHotkey = source.AppExposeHotkey;
-        Title = "MissionView Settings";
+        Title = "MissionView";
+        AutomationProperties.SetName(this, "MissionView settings");
         Width = Math.Min(720, SystemParameters.WorkArea.Width);
         Height = Math.Min(480, SystemParameters.WorkArea.Height);
         MaxHeight = SystemParameters.WorkArea.Height;
@@ -111,9 +125,10 @@ internal sealed class SettingsWindow : Window
         KeyboardNavigation.SetTabIndex(footer, 100);
         KeyboardNavigation.SetTabIndex(cancel, 0);
         KeyboardNavigation.SetTabIndex(save, 1);
-        var body = new DockPanel();
+        var body = new DockPanel { VerticalAlignment = VerticalAlignment.Top };
         var bodyScroll = new ScrollViewer { Content = body, VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
-            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled, Focusable = false };
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled, Focusable = false,
+            VerticalContentAlignment = VerticalAlignment.Top };
         root.Children.Add(bodyScroll);
         var brand = new Grid();
         brand.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
@@ -128,7 +143,7 @@ internal sealed class SettingsWindow : Window
                 brand.Children.Add(image);
             }
         }
-        var heading = new TextBlock { Text = "MissionView settings", FontSize = 22, FontWeight = FontWeights.SemiBold, TextWrapping = TextWrapping.Wrap };
+        var heading = new TextBlock { Text = "Settings", FontSize = 22, FontWeight = FontWeights.SemiBold, TextWrapping = TextWrapping.Wrap };
         Grid.SetColumn(heading, 1);
         brand.Children.Add(heading);
         brand.Margin = new Thickness(0, 0, 0, 20);
@@ -138,6 +153,8 @@ internal sealed class SettingsWindow : Window
         categories.Foreground = Foreground;
         categories.BorderThickness = new Thickness(0);
         categories.Padding = new Thickness(0);
+        categories.VerticalContentAlignment = VerticalAlignment.Top;
+        categories.HorizontalContentAlignment = HorizontalAlignment.Stretch;
         KeyboardNavigation.SetTabIndex(categories, 0);
         body.Children.Add(categories);
         var general = AddCategory("General");
@@ -200,6 +217,7 @@ internal sealed class SettingsWindow : Window
                 recorder.Tag = "Cancel";
                 feedback.Tag = null;
                 feedback.Text = "Use Ctrl, Alt or Win with a key. Escape cancels recording.";
+                shortcutPreview.Visibility = appExposePreview.Visibility = Visibility.Collapsed;
                 RefreshRecorderNames();
             };
             recorder.PreviewKeyDown += RecordShortcut;
@@ -209,6 +227,7 @@ internal sealed class SettingsWindow : Window
             };
         }
         AutomationProperties.SetLiveSetting(exposeHint, AutomationLiveSetting.Polite);
+        AutomationProperties.SetAutomationId(exposeHint, "App Exposé availability");
         shortcuts.Children.Add(exposeHint);
         RefreshShortcutHint();
         hotCorners.IsChecked = source.EnableHotCorners;
@@ -232,51 +251,35 @@ internal sealed class SettingsWindow : Window
             ?? throw new InvalidOperationException("The MissionView application version is missing.")).ToString(3);
         about.Children.Add(new TextBlock { Text = $"MissionView v{version}", FontSize = 18, FontWeight = FontWeights.SemiBold,
             Margin = new Thickness(0, 0, 0, 12), TextWrapping = TextWrapping.Wrap });
-        about.Children.Add(new TextBlock { Text = "Check for updates when you choose. MissionView does not check automatically.",
-            TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 12) });
         about.Children.Add(updatePanel);
         updatePanel.Children.Add(updates);
         about.Children.Add(new TextBlock { Text = "MIT license.",
             TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 20, 0, 0) });
+        var credits = new StackPanel { Margin = new Thickness(0, 16, 0, 0) };
+        AddProjectLink(credits, "Original", "miguelo96/WindowScatter", "https://github.com/miguelo96/WindowScatter");
+        AddProjectLink(credits, "Based on", "RuoChen5251/WindowScatter", "https://github.com/RuoChen5251/WindowScatter");
+        AddProjectLink(credits, "Repository", "JUANES545/missionview", "https://github.com/JUANES545/missionview");
+        about.Children.Add(credits);
         categories.SelectionChanged += (_, e) =>
         {
             if (!ReferenceEquals(e.Source, categories)) return;
             if (IsRecordingShortcut) StopRecording();
-            foreach (var help in contextualHelp) ((ToolTip)help.Button.ToolTip).IsOpen = false;
-            ConstrainGeneralViewport();
+            CollapseContextualHelp();
         };
         categories.SizeChanged += (_, _) => ReflowPreferences();
-        void ConstrainGeneralViewport()
-        {
-            if (bodyScroll.ActualHeight <= 0 || categories.SelectedItem is not TabItem selected) return;
-            var selectedScroll = (ScrollViewer)selected.Content;
-            double headerHeight = categories.ActualHeight - selectedScroll.ActualHeight;
-            var generalScroll = (ScrollViewer)((TabItem)categories.Items[0]).Content;
-            // Keep the longer list inside its category, retaining the outer fallback on very short windows.
-            generalScroll.MaxHeight = Math.Max(160, bodyScroll.ActualHeight - brand.ActualHeight - brand.Margin.Bottom - headerHeight);
-        }
-        bodyScroll.SizeChanged += (_, _) => ConstrainGeneralViewport();
-        categories.SizeChanged += (_, _) => ConstrainGeneralViewport();
         SystemParameters.StaticPropertyChanged += RefreshSystemPalette;
         Closed += (_, _) =>
         {
             SystemParameters.StaticPropertyChanged -= RefreshSystemPalette;
-            foreach (var help in contextualHelp) ((ToolTip)help.Button.ToolTip).IsOpen = false;
+            CollapseContextualHelp();
         };
         PreviewKeyDown += (_, e) =>
         {
             if (e.Key == Key.Escape)
             {
                 if (IsRecordingShortcut) StopRecording();
-                else if (contextualHelp.Any(help => help.Detail.Visibility == Visibility.Visible || ((ToolTip)help.Button.ToolTip).IsOpen))
-                {
-                    foreach (var help in contextualHelp)
-                    {
-                        ((ToolTip)help.Button.ToolTip).IsOpen = false;
-                        help.Detail.Visibility = Visibility.Collapsed;
-                        AutomationProperties.SetItemStatus(help.Button, "Collapsed");
-                    }
-                }
+                else if (contextualHelp.Any(help => help.Detail.Visibility == Visibility.Visible))
+                    CollapseContextualHelp();
                 else Close();
                 e.Handled = true;
             }
@@ -285,6 +288,88 @@ internal sealed class SettingsWindow : Window
     }
 
     internal void ShowUpdates() => categories.SelectedIndex = 3;
+
+    private void AddProjectLink(Panel parent, string label, string project, string url)
+    {
+        var address = new Uri(url);
+        var line = new TextBlock { TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 8) };
+        line.Inlines.Add(new Run($"{label}: "));
+        var link = new Hyperlink(new Run(project)) { NavigateUri = address };
+        link.SetResourceReference(TextElement.ForegroundProperty, "LinkForeground");
+        var focus = new Style(typeof(Control));
+        var border = new FrameworkElementFactory(typeof(Border));
+        border.SetResourceReference(Border.BorderBrushProperty, "FieldFocus");
+        border.SetValue(Border.BorderThicknessProperty, new Thickness(2));
+        focus.Setters.Add(new Setter(Control.TemplateProperty, new ControlTemplate(typeof(Control)) { VisualTree = border }));
+        link.FocusVisualStyle = focus;
+        AutomationProperties.SetName(link, $"{label}: {project}");
+        AutomationProperties.SetHelpText(link, address.AbsoluteUri);
+        line.RequestBringIntoView += (_, e) =>
+        {
+            // Wrapped hyperlinks otherwise request only their first text rectangle.
+            if (!ReferenceEquals(e.TargetObject, line) || e.TargetRect.IsEmpty) return;
+            e.Handled = true;
+            line.BringIntoView();
+        };
+        link.RequestNavigate += (_, e) =>
+        {
+            e.Handled = true;
+            try { openProjectLink(address); }
+            catch (Exception error) when (error is System.ComponentModel.Win32Exception or InvalidOperationException)
+            {
+                Trace.TraceError($"Could not open project link '{address}': {error}");
+                feedback.Tag = "Error";
+                feedback.Text = $"Could not open this link. {error.Message}";
+                UIElementAutomationPeer.FromElement(feedback)?.RaiseAutomationEvent(AutomationEvents.LiveRegionChanged);
+            }
+        };
+        line.Inlines.Add(link);
+        parent.Children.Add(line);
+    }
+
+    protected override void OnSourceInitialized(EventArgs e)
+    {
+        base.OnSourceInitialized(e);
+        ApplyNativeCaption(SystemParameters.HighContrast);
+    }
+
+    internal bool ApplyNativeCaption(bool highContrast, Func<IntPtr, int, int, int>? setAttribute = null)
+    {
+        var handle = new WindowInteropHelper(this).Handle;
+        if (handle == IntPtr.Zero) return false;
+        setAttribute ??= SetCaptionAttribute;
+        bool applied = true;
+        Write(20, highContrast ? 0 : 1);
+        Write(35, highContrast ? -1 : ColorRef(SharedBrushes.Graphite.Color));
+        Write(36, highContrast ? -1 : ColorRef(SharedBrushes.Text.Color));
+        return applied;
+
+        void Write(int attribute, int value)
+        {
+            int result = setAttribute(handle, attribute, value);
+            if (result < 0)
+            {
+                applied = false;
+                Trace.TraceWarning($"Settings caption attribute {attribute} failed (HRESULT 0x{result:X8}); Windows keeps its native fallback.");
+            }
+        }
+        static int ColorRef(Color color) => color.R | color.G << 8 | color.B << 16;
+    }
+
+    private static int SetCaptionAttribute(IntPtr handle, int attribute, int value)
+        => DwmSetWindowAttribute(handle, attribute, ref value, sizeof(int));
+
+    [DllImport("dwmapi.dll")]
+    private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attribute, ref int value, int size);
+
+    private void CollapseContextualHelp()
+    {
+        foreach (var help in contextualHelp)
+        {
+            help.Detail.Visibility = Visibility.Collapsed;
+            AutomationProperties.SetItemStatus(help.Button, "Collapsed");
+        }
+    }
 
     private void RefreshSystemPalette(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
     {
@@ -301,21 +386,20 @@ internal sealed class SettingsWindow : Window
             saveButton.Background = SystemParameters.HighContrast ? SystemColors.ControlBrush : SharedBrushes.Mint;
             saveButton.Foreground = SystemParameters.HighContrast ? SystemColors.ControlTextBrush : SharedBrushes.Graphite;
             ApplyControlStyles();
+            ApplyNativeCaption(SystemParameters.HighContrast);
         });
     }
 
     private StackPanel AddCategory(string title)
     {
         var form = new StackPanel { Margin = new Thickness(0, 16, 0, 4) };
-        var scroll = new ScrollViewer { Content = form, VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
-            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled, Focusable = false };
-        categories.Items.Add(new TabItem { Header = title, Content = scroll });
+        categories.Items.Add(new TabItem { Header = title, Content = form });
         return form;
     }
 
     private void AddPreference(Panel form, string text, Control control, string? help = null)
     {
-        var row = new Grid { Margin = new Thickness(0, 0, 0, 8), MinHeight = 64 };
+        var row = new Grid { Margin = new Thickness(0, 0, 0, 8) };
         row.ColumnDefinitions.Add(new ColumnDefinition());
         row.ColumnDefinitions.Add(new ColumnDefinition());
         row.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
@@ -323,33 +407,20 @@ internal sealed class SettingsWindow : Window
         row.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         var captionText = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
         captionText.Children.Add(new TextBlock { Text = text, FontWeight = FontWeights.SemiBold, TextWrapping = TextWrapping.Wrap });
-        string description = text switch
-        {
-            "Startup" => "Open at sign-in",
-            "Selection border" => "Selected window outline",
-            "Overview displays" => "Where the overview opens",
-            "Thumbnail size" => "Preview dimensions",
-            "Minimized windows" => "App Exposé shelf",
-            "Animations" => "Optional movement",
-            "Reset settings" => "Restore defaults before saving",
-            "Overview shortcut" => "All windows",
-            "App Exposé shortcut" => "Windows from one app",
-            "Activation" => "Open from a screen corner",
-            "Corner" => "Pointer location",
-            _ => "Time before opening"
-        };
-        var summary = new TextBlock { Text = description, FontSize = 12, TextWrapping = TextWrapping.Wrap,
-            Margin = new Thickness(0, 4, 0, 0) };
         if (control == dimming)
+        {
+            var summary = new TextBlock { FontSize = 12, TextWrapping = TextWrapping.Wrap,
+                Margin = new Thickness(0, 4, 0, 0) };
             summary.SetBinding(TextBlock.TextProperty, new Binding(nameof(Slider.Value)) { Source = dimming, StringFormat = "{0:0}% dimming" });
-        summary.SetResourceReference(TextBlock.ForegroundProperty, "SecondaryText");
-        captionText.Children.Add(summary);
+            summary.SetResourceReference(TextBlock.ForegroundProperty, "SecondaryText");
+            captionText.Children.Add(summary);
+        }
         var label = new Label { Content = captionText,
             Target = control, Foreground = Foreground, Padding = new Thickness(0, 8, 8, 8), Margin = new Thickness(12, 0, 0, 0) };
         row.Children.Add(label);
         Grid.SetColumn(control, 1);
         control.MinHeight = 36;
-        control.Margin = new Thickness(12, 12, 12, 12);
+        control.Margin = new Thickness(12, 8, 12, 8);
         control.VerticalAlignment = VerticalAlignment.Center;
         if (control is not CheckBox)
         {
@@ -357,14 +428,24 @@ internal sealed class SettingsWindow : Window
             AutomationProperties.SetAutomationId(control, text);
         }
         row.Children.Add(control);
+        if (ReferenceEquals(control, shortcut) || ReferenceEquals(control, appExposeShortcut))
+        {
+            var preview = ReferenceEquals(control, shortcut) ? shortcutPreview : appExposePreview;
+            row.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            Grid.SetRow(preview, 3);
+            Grid.SetColumnSpan(preview, 2);
+            preview.SetResourceReference(TextBlock.ForegroundProperty, "FieldForeground");
+            AutomationProperties.SetLiveSetting(preview, AutomationLiveSetting.Polite);
+            AutomationProperties.SetHelpText(preview, "Applies when you save.");
+            row.Children.Add(preview);
+        }
         preferenceRows.Add(row);
         form.Children.Add(row);
         if (help != null)
         {
             AutomationProperties.SetHelpText(control, help);
-            control.ToolTip = help;
             var detail = new TextBlock { Text = help, TextWrapping = TextWrapping.Wrap,
-                Visibility = Visibility.Collapsed, Margin = new Thickness(0, 8, 0, 0) };
+                Visibility = Visibility.Collapsed, Margin = new Thickness(12, 0, 12, 12) };
             Grid.SetRow(detail, 2);
             Grid.SetColumnSpan(detail, 2);
             row.Children.Add(detail);
@@ -381,19 +462,9 @@ internal sealed class SettingsWindow : Window
             AutomationProperties.SetAutomationId(info, $"{text} help");
             AutomationProperties.SetHelpText(info, help);
             AutomationProperties.SetItemStatus(info, "Collapsed");
-            var tooltip = new ToolTip { PlacementTarget = info, Placement = System.Windows.Controls.Primitives.PlacementMode.Bottom,
-                Content = new TextBlock { Text = help, TextWrapping = TextWrapping.Wrap, MaxWidth = 300 } };
-            info.ToolTip = tooltip;
-            info.GotKeyboardFocus += (_, _) =>
-            {
-                if (IsRecordingShortcut) StopRecording();
-                if (detail.Visibility != Visibility.Visible) tooltip.IsOpen = true;
-            };
-            info.LostKeyboardFocus += (_, _) => tooltip.IsOpen = false;
             info.Click += (_, _) =>
             {
                 if (IsRecordingShortcut) StopRecording();
-                tooltip.IsOpen = false;
                 detail.Visibility = detail.Visibility == Visibility.Visible ? Visibility.Collapsed : Visibility.Visible;
                 AutomationProperties.SetItemStatus(info, detail.Visibility == Visibility.Visible ? "Expanded" : "Collapsed");
                 if (detail.Visibility == Visibility.Visible) detail.BringIntoView();
@@ -433,7 +504,7 @@ internal sealed class SettingsWindow : Window
         surface.SetResourceReference(Border.BackgroundProperty, "PreferenceSurface");
         surface.SetResourceReference(Border.BorderBrushProperty, "PreferenceEdge");
         Grid.SetColumnSpan(surface, 2);
-        Grid.SetRowSpan(surface, 3);
+        Grid.SetRowSpan(surface, row.RowDefinitions.Count);
         Panel.SetZIndex(surface, -1);
         row.Children.Add(surface);
         ReflowPreferences();
@@ -493,7 +564,8 @@ internal sealed class SettingsWindow : Window
         button.Setters.Add(new Setter(Control.TemplateProperty, template));
         Resources[typeof(Button)] = button;
         var tab = new Style(typeof(TabItem));
-        tab.Setters.Add(new Setter(Control.PaddingProperty, new Thickness(10, 10, 10, 10)));
+        tab.Setters.Add(new Setter(Control.PaddingProperty, new Thickness(12, 10, 12, 10)));
+        tab.Setters.Add(new Setter(FrameworkElement.MarginProperty, new Thickness(0, 0, 12, 0)));
         tab.Setters.Add(new Setter(Control.ForegroundProperty, Foreground));
         var tabBorder = new FrameworkElementFactory(typeof(Border), "TabFrame");
         tabBorder.SetValue(Border.BackgroundProperty, Background);
@@ -519,6 +591,18 @@ internal sealed class SettingsWindow : Window
         tabTemplate.Triggers.Add(tabFocus);
         tab.Setters.Add(new Setter(Control.TemplateProperty, tabTemplate));
         Resources[typeof(TabItem)] = tab;
+        var categoryTemplate = new ControlTemplate(typeof(TabControl));
+        var categoryRoot = new FrameworkElementFactory(typeof(DockPanel));
+        var headers = new FrameworkElementFactory(typeof(WrapPanel));
+        headers.SetValue(Panel.IsItemsHostProperty, true);
+        headers.SetValue(DockPanel.DockProperty, Dock.Top);
+        categoryRoot.AppendChild(headers);
+        var selectedContent = new FrameworkElementFactory(typeof(ContentPresenter), "PART_SelectedContentHost");
+        selectedContent.SetValue(ContentPresenter.ContentSourceProperty, "SelectedContent");
+        selectedContent.SetValue(FrameworkElement.VerticalAlignmentProperty, VerticalAlignment.Top);
+        categoryRoot.AppendChild(selectedContent);
+        categoryTemplate.VisualTree = categoryRoot;
+        categories.Template = categoryTemplate;
     }
 
     private static SolidColorBrush Brush(string color) => new((Color)ColorConverter.ConvertFromString(color));
@@ -583,10 +667,14 @@ internal sealed class SettingsWindow : Window
     private void RefreshShortcutHint()
     {
         shortcut.Content = hotkey;
-        if (!OverviewShortcutPair.TryParse(hotkey, appExposeHotkey, out var pair, out string error))
+        shortcutPreview.Text = appExposePreview.Text = "";
+        shortcutPreview.Visibility = appExposePreview.Visibility = Visibility.Collapsed;
+        if (!OverviewShortcutPair.TryGetPreviewWarning(hotkey, appExposeHotkey, out string warning, out string error) ||
+            !OverviewShortcutPair.TryParse(hotkey, appExposeHotkey, out var pair, out error))
         {
             appExposeShortcut.Content = appExposeHotkey ?? "Record shortcut...";
             exposeHint.Text = error;
+            exposeHint.Visibility = Visibility.Visible;
             RefreshRecorderNames();
             return;
         }
@@ -601,6 +689,9 @@ internal sealed class SettingsWindow : Window
                     ? appExposeHotkey == null ? "Follows Overview" : ""
                     : "App Exposé is unavailable: Windows could not reserve both shortcuts. Choose another shortcut.";
         exposeHint.Visibility = exposeHint.Text.Length == 0 ? Visibility.Collapsed : Visibility.Visible;
+        var preview = pair.AppExpose == new OverviewHotkey(8, 'W') ? appExposePreview : shortcutPreview;
+        preview.Text = warning;
+        preview.Visibility = Visibility.Visible;
         RefreshRecorderNames();
     }
 

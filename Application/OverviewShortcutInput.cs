@@ -2,7 +2,7 @@ namespace WindowScatter
 {
     internal readonly record struct OverviewShortcutEvent(bool Suppress, bool Activate, bool AppExpose,
         int Modifiers, WindowActivationTarget Foreground, WindowActivationTarget ApplicationWindow = default,
-        string? CaptureError = null);
+        string? CaptureError = null, bool MaskMenus = false);
 
     internal sealed class OverviewShortcutInput
     {
@@ -23,26 +23,31 @@ namespace WindowScatter
 
         public void Reset()
         {
-            modifiers.Clear();
             interaction.ActivationKeyUp();
         }
 
-        public OverviewShortcutEvent Process(int key, bool down, bool recording, OverviewHotkeys? bindings)
+        public OverviewShortcutEvent Process(int key, bool down, bool recording, OverviewHotkeys? bindings,
+            bool injected = false)
         {
+            // Injected input passes through; it must not release or latch a physical shortcut.
+            if (injected) return new(false, false, false, modifiers.Modifiers, default);
             if (recording)
             {
                 if (!wasRecording) recordingModifiers.Clear();
+                modifiers.Clear();
                 wasRecording = true;
                 recordingModifiers.Update(key, down);
+                bool suppress = down ? suppressedKeys.Contains(key) : suppressedKeys.Remove(key);
                 if (down) pressedKeys.Add(key);
-                else { pressedKeys.Remove(key); suppressedKeys.Remove(key); }
+                else pressedKeys.Remove(key);
                 Reset();
-                return new(false, false, false, recordingModifiers.Modifiers, default);
+                return new(suppress, false, false, recordingModifiers.Modifiers, default);
             }
             if (wasRecording)
             {
                 wasRecording = false;
                 recordingModifiers.Clear();
+                modifiers.Clear();
                 Reset();
             }
             modifiers.Update(key, down);
@@ -74,7 +79,8 @@ namespace WindowScatter
                     captureError = ex.Message;
                 }
             }
-            return new(suppressedKeys.Contains(key), activate, app, modifiers.Modifiers, foreground, applicationWindow, captureError);
+            return new(suppressedKeys.Contains(key), activate, app, modifiers.Modifiers, foreground, applicationWindow,
+                captureError, firstDown && (normal || app) && (modifiers.Modifiers & 0x0A) != 0);
         }
     }
 }
