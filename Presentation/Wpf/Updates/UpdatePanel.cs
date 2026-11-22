@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using System.Windows;
 using System.Windows.Automation;
+using System.Windows.Automation.Peers;
 using System.Windows.Controls;
 
 namespace WindowScatter;
@@ -11,7 +12,7 @@ internal sealed class UpdatePanel : StackPanel
     private readonly Func<UpdateRelease, CancellationToken, Task<bool>> confirm;
     private readonly TextBlock status = new() { TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 8) };
     private readonly ProgressBar progress = new() { Height = 4, Minimum = 0, Maximum = 1, Margin = new Thickness(0, 0, 0, 8) };
-    private readonly Button action = new() { HorizontalAlignment = HorizontalAlignment.Left, Padding = new Thickness(12, 6, 12, 6) };
+    private readonly Button action = new() { HorizontalAlignment = HorizontalAlignment.Left, Padding = new Thickness(16, 10, 16, 10), MinHeight = 40 };
     private readonly Button cancel = new() { Content = "Cancel update", HorizontalAlignment = HorizontalAlignment.Left, Padding = new Thickness(12, 6, 12, 6), Margin = new Thickness(0, 8, 0, 0) };
 
     internal UpdatePanel(UpdateController controller, Func<UpdateRelease, CancellationToken, Task<bool>> confirm)
@@ -22,6 +23,10 @@ internal sealed class UpdatePanel : StackPanel
         Children.Add(progress);
         Children.Add(action);
         Children.Add(cancel);
+        action.SetResourceReference(Control.BackgroundProperty, "FieldSelection");
+        action.SetResourceReference(Control.ForegroundProperty, "FieldSelectionText");
+        progress.SetResourceReference(Control.ForegroundProperty, "FieldFocus");
+        progress.SetResourceReference(Control.BackgroundProperty, "PreferenceSurface");
         AutomationProperties.SetLiveSetting(status, AutomationLiveSetting.Polite);
         AutomationProperties.SetName(progress, "Update progress");
         action.Click += async (_, _) => await ExecuteAction();
@@ -39,7 +44,20 @@ internal sealed class UpdatePanel : StackPanel
     private void Refresh()
     {
         var state = controller.State;
-        status.Text = state.Message;
+        status.Text = state.Status switch
+        {
+            UpdateStatus.Idle => "",
+            UpdateStatus.Checking => "Checking...",
+            UpdateStatus.Available when state.AvailableVersion is { } version => $"Version {version} available.",
+            _ => state.Message
+        };
+        status.Visibility = status.Text.Length == 0 ? Visibility.Collapsed : Visibility.Visible;
+        status.SetResourceReference(TextBlock.ForegroundProperty, state.Status switch
+        {
+            UpdateStatus.Error => "FieldError",
+            UpdateStatus.UpToDate => "FieldFocus",
+            _ => "FieldForeground"
+        });
         progress.Visibility = state.IsBusy && (!state.IsIndeterminate || SystemParameters.ClientAreaAnimation)
             ? Visibility.Visible : Visibility.Collapsed;
         progress.IsIndeterminate = state.IsIndeterminate && SystemParameters.ClientAreaAnimation;
@@ -48,7 +66,7 @@ internal sealed class UpdatePanel : StackPanel
         {
             UpdateStatus.Available => "Download update",
             UpdateStatus.ReadyToInstall => "Install update...",
-            _ => "Check for updates..."
+            _ => "Check for updates"
         };
         action.IsEnabled = !state.IsBusy && !controller.HasInstallerStarted;
         cancel.Visibility = !controller.HasInstallerStarted && state.IsBusy && state.Status is UpdateStatus.Checking or UpdateStatus.Downloading or UpdateStatus.Verifying
@@ -71,6 +89,9 @@ internal sealed class UpdatePanel : StackPanel
         {
             System.Diagnostics.Trace.TraceError($"Could not complete update action: {error}");
             status.Text = $"The update action failed. {error.Message}";
+            status.Visibility = Visibility.Visible;
+            status.SetResourceReference(TextBlock.ForegroundProperty, "FieldError");
+            UIElementAutomationPeer.FromElement(status)?.RaiseAutomationEvent(AutomationEvents.LiveRegionChanged);
         }
     }
 }

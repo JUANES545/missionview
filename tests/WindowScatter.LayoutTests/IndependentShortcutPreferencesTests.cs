@@ -80,6 +80,58 @@ public sealed class IndependentShortcutPreferencesTests : IDisposable
     }
 
     [Fact]
+    public void FailedPersistenceRestoresOccupiedHookPairAndReopenUsesTheSameSavedRoutes()
+    {
+        var settings = new AppSettings { Hotkey = "Win+W" };
+        Store.Save(settings);
+        var originalBytes = File.ReadAllBytes(Current);
+        var active = new Dictionary<int, OverviewHotkey>();
+        OverviewHotkeys Create() => new((id, key) =>
+        {
+            if (key.Key == 'W' || active.ContainsKey(id) || active.Values.Contains(key)) return false;
+            active.Add(id, key);
+            return true;
+        }, active.Remove, () => true);
+        var bindings = Create();
+        Assert.True(bindings.TryInitialize(settings.Hotkey, settings.AppExposeHotkey, out _));
+        Assert.Empty(active);
+        var candidate = settings.Copy();
+        candidate.Hotkey = "Ctrl+F1";
+        candidate.AppExposeHotkey = "Alt+E";
+        File.Move(Current, Current + ".preserved");
+        Directory.CreateDirectory(Current);
+        var errors = new List<Exception>();
+        Assert.False(new PreferencesService(settings, Store.Save).TryApply(candidate,
+            () => throw new Exception("Persistence must fail before external settings change."),
+            () =>
+            {
+                if (!bindings.TryApply(settings.Hotkey, settings.AppExposeHotkey, false, out var error))
+                    throw new InvalidOperationException(error);
+            }, errors.Add, () =>
+            {
+                if (!bindings.TryApply(candidate.Hotkey, candidate.AppExposeHotkey, false, out var error))
+                    throw new InvalidOperationException(error);
+            }));
+        Assert.Single(errors);
+        Assert.Empty(active);
+        Assert.True(bindings.MatchesNormal('W', 8));
+        Assert.True(bindings.MatchesAppExpose('W', 12));
+        Assert.Equal("Win+W", settings.Hotkey);
+        Assert.Null(settings.AppExposeHotkey);
+        Assert.Equal(originalBytes, File.ReadAllBytes(Current + ".preserved"));
+        Assert.True(bindings.Release());
+        Directory.Delete(Current);
+        File.Move(Current + ".preserved", Current);
+        var loaded = Store.Load();
+        var reopened = Create();
+        Assert.True(reopened.TryInitialize(loaded.Hotkey, loaded.AppExposeHotkey, out _));
+        Assert.Empty(active);
+        Assert.True(reopened.MatchesNormal('W', 8));
+        Assert.True(reopened.MatchesAppExpose('W', 12));
+        Assert.True(reopened.Release());
+    }
+
+    [Fact]
     public void FailedSaveAfterPairReservationRestoresBothSettingsAndActualReservations()
     {
         var settings = new AppSettings { Hotkey = "Win+F12", AppExposeHotkey = "Alt+E" };

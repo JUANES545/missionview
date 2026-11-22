@@ -1,5 +1,6 @@
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Markup;
 using System.Windows.Media;
 
@@ -24,10 +25,99 @@ internal static class SettingsControlStyles
         resources["FieldSelection"] = highContrast ? SystemColors.HighlightBrush : Brush("#465B4C");
         resources["FieldSelectionText"] = highContrast ? SystemColors.HighlightTextBrush : Brushes.White;
         resources["FieldError"] = highContrast ? SystemColors.WindowTextBrush : Brush("#FFB4AB");
-        if (resources.Contains(typeof(TextBox))) return;
+        resources["ScrollThumb"] = highContrast ? SystemColors.WindowTextBrush : SharedBrushes.Secondary;
+        resources["LinkForeground"] = highContrast ? SystemColors.HotTrackBrush : SharedBrushes.Mint;
+        if (resources.Contains(typeof(TextBox)))
+        {
+            resources[typeof(ScrollBar)] = highContrast ? new Style(typeof(ScrollBar)) : resources["SettingsScrollBarStyle"];
+            return;
+        }
         var styles = (ResourceDictionary)XamlReader.Parse("""
             <ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
                                 xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+              <Style x:Key="SettingsScrollThumb" TargetType="Thumb">
+                <Setter Property="MinHeight" Value="24"/>
+                <Setter Property="Template">
+                  <Setter.Value>
+                    <ControlTemplate TargetType="Thumb">
+                      <Grid Background="Transparent">
+                        <Border x:Name="Ink" Background="{DynamicResource ScrollThumb}" CornerRadius="2" Margin="4,0"/>
+                      </Grid>
+                      <ControlTemplate.Triggers>
+                        <DataTrigger Binding="{Binding Orientation, RelativeSource={RelativeSource AncestorType=ScrollBar}}" Value="Horizontal">
+                          <Setter Property="MinHeight" Value="0"/>
+                          <Setter Property="MinWidth" Value="24"/>
+                          <Setter TargetName="Ink" Property="Margin" Value="0,4"/>
+                        </DataTrigger>
+                        <DataTrigger Binding="{Binding IsMouseOver, RelativeSource={RelativeSource AncestorType=ScrollBar}}" Value="True">
+                          <Setter TargetName="Ink" Property="Margin" Value="2,0"/>
+                        </DataTrigger>
+                        <DataTrigger Binding="{Binding IsKeyboardFocusWithin, RelativeSource={RelativeSource AncestorType=ScrollViewer}}" Value="True">
+                          <Setter TargetName="Ink" Property="Margin" Value="2,0"/>
+                        </DataTrigger>
+                        <MultiDataTrigger>
+                          <MultiDataTrigger.Conditions>
+                            <Condition Binding="{Binding Orientation, RelativeSource={RelativeSource AncestorType=ScrollBar}}" Value="Horizontal"/>
+                            <Condition Binding="{Binding IsMouseOver, RelativeSource={RelativeSource AncestorType=ScrollBar}}" Value="True"/>
+                          </MultiDataTrigger.Conditions>
+                          <Setter TargetName="Ink" Property="Margin" Value="0,2"/>
+                        </MultiDataTrigger>
+                        <MultiDataTrigger>
+                          <MultiDataTrigger.Conditions>
+                            <Condition Binding="{Binding Orientation, RelativeSource={RelativeSource AncestorType=ScrollBar}}" Value="Horizontal"/>
+                            <Condition Binding="{Binding IsKeyboardFocusWithin, RelativeSource={RelativeSource AncestorType=ScrollViewer}}" Value="True"/>
+                          </MultiDataTrigger.Conditions>
+                          <Setter TargetName="Ink" Property="Margin" Value="0,2"/>
+                        </MultiDataTrigger>
+                      </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                  </Setter.Value>
+                </Setter>
+              </Style>
+              <Style TargetType="ScrollBar">
+                <Setter Property="MinWidth" Value="0"/>
+                <Setter Property="MinHeight" Value="0"/>
+                <Setter Property="Width" Value="12"/>
+                <Setter Property="Background" Value="Transparent"/>
+                <Setter Property="Focusable" Value="False"/>
+                <Setter Property="Template">
+                  <Setter.Value>
+                    <ControlTemplate TargetType="ScrollBar">
+                      <Grid Background="{TemplateBinding Background}">
+                        <Track x:Name="PART_Track" Orientation="{TemplateBinding Orientation}" IsDirectionReversed="True"
+                               Minimum="{TemplateBinding Minimum}" Maximum="{TemplateBinding Maximum}"
+                               ViewportSize="{TemplateBinding ViewportSize}"
+                               Value="{Binding Value, Mode=TwoWay, RelativeSource={RelativeSource TemplatedParent}}">
+                          <Track.DecreaseRepeatButton>
+                            <RepeatButton x:Name="Decrease" Command="{x:Static ScrollBar.PageUpCommand}" Focusable="False">
+                              <RepeatButton.Template>
+                                <ControlTemplate TargetType="RepeatButton"><Border Background="Transparent"/></ControlTemplate>
+                              </RepeatButton.Template>
+                            </RepeatButton>
+                          </Track.DecreaseRepeatButton>
+                          <Track.Thumb><Thumb Style="{StaticResource SettingsScrollThumb}"/></Track.Thumb>
+                          <Track.IncreaseRepeatButton>
+                            <RepeatButton x:Name="Increase" Command="{x:Static ScrollBar.PageDownCommand}" Focusable="False">
+                              <RepeatButton.Template>
+                                <ControlTemplate TargetType="RepeatButton"><Border Background="Transparent"/></ControlTemplate>
+                              </RepeatButton.Template>
+                            </RepeatButton>
+                          </Track.IncreaseRepeatButton>
+                        </Track>
+                      </Grid>
+                      <ControlTemplate.Triggers>
+                        <Trigger Property="Orientation" Value="Horizontal">
+                          <Setter Property="Width" Value="Auto"/>
+                          <Setter Property="Height" Value="12"/>
+                          <Setter TargetName="PART_Track" Property="IsDirectionReversed" Value="False"/>
+                          <Setter TargetName="Decrease" Property="Command" Value="{x:Static ScrollBar.PageLeftCommand}"/>
+                          <Setter TargetName="Increase" Property="Command" Value="{x:Static ScrollBar.PageRightCommand}"/>
+                        </Trigger>
+                      </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                  </Setter.Value>
+                </Setter>
+              </Style>
               <Style TargetType="CheckBox">
                 <Setter Property="Foreground" Value="{DynamicResource FieldForeground}"/>
                 <Setter Property="VerticalContentAlignment" Value="Center"/>
@@ -145,7 +235,8 @@ internal static class SettingsControlStyles
                           <Border Background="{DynamicResource FieldBackground}" BorderBrush="{DynamicResource FieldBorder}"
                                   BorderThickness="1" CornerRadius="6" Padding="4"
                                   MinWidth="{Binding ActualWidth, RelativeSource={RelativeSource TemplatedParent}}">
-                            <ScrollViewer MaxHeight="{TemplateBinding MaxDropDownHeight}" CanContentScroll="True">
+                            <ScrollViewer MaxHeight="{TemplateBinding MaxDropDownHeight}" CanContentScroll="True"
+                                          VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
                               <ItemsPresenter KeyboardNavigation.DirectionalNavigation="Contained"/>
                             </ScrollViewer>
                           </Border>
@@ -201,6 +292,8 @@ internal static class SettingsControlStyles
             </ResourceDictionary>
             """);
         foreach (object key in styles.Keys) resources[key] = styles[key];
+        resources["SettingsScrollBarStyle"] = resources[typeof(ScrollBar)];
+        if (highContrast) resources[typeof(ScrollBar)] = new Style(typeof(ScrollBar));
     }
 
     private static SolidColorBrush Brush(string color) => new((Color)ColorConverter.ConvertFromString(color));

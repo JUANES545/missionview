@@ -306,21 +306,26 @@ namespace WindowScatter
                 if (down || up)
                 {
                     int key = Marshal.ReadInt32(lParam);
+                    bool injected = (Marshal.ReadInt32(lParam, 8) & 0x10) != 0;
                     bool recording = false;
                     QueryShortcutRecording(ref recording);
-                    var input = shortcutInput.Process(key, down, recording, overviewHotkeys);
-                    if (recording)
+                    var input = shortcutInput.Process(key, down, recording, overviewHotkeys, injected);
+                    if (recording && !injected)
                         RecordOverviewShortcutKey(key, input.Modifiers, down);
                     if (input.Suppress)
                     {
-                        if (down && (input.Modifiers & 0x0A) != 0)
+                        if (input.MaskMenus)
                             KeyboardMenuMask.TrySend(SendInput);
                         if (input.Activate)
+                        {
+                            int revision = overviewHotkeys?.Revision ?? -1;
                             this.Dispatcher.BeginInvoke(new Action(async () =>
                             {
+                                if (isClosing || overviewHotkeys?.Revision != revision) return;
                                 if (input.AppExpose) await ToggleAppExposeAsync(input.Foreground, input.ApplicationWindow, input.CaptureError);
                                 else await ToggleScatterAsync();
                             }));
+                        }
                         return (IntPtr)1;
                     }
                 }
@@ -385,8 +390,8 @@ namespace WindowScatter
 
             if (hookID != IntPtr.Zero)
             {
-                UnhookWindowsHookEx(hookID);
-                hookID = IntPtr.Zero;
+                if (UnhookWindowsHookEx(hookID)) hookID = IntPtr.Zero;
+                else System.Diagnostics.Trace.TraceError($"Windows could not release the overview keyboard handler: {Marshal.GetLastWin32Error()}.");
             }
             if (overviewHotkeys?.Release() == false)
                 System.Diagnostics.Trace.TraceWarning("Windows could not release all overview shortcuts during shutdown.");

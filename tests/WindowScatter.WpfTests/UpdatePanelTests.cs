@@ -6,13 +6,117 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Windows;
+using System.Windows.Automation;
+using System.Windows.Automation.Peers;
 using System.Windows.Controls;
+using System.Windows.Media;
+using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using WindowScatter;
 using Xunit;
 
 public sealed class UpdatePanelTests
 {
+    [Fact]
+    public void ActionFailureBeforeTheControllerLeavesIdleIsVisibleAndAccessible()
+        => RunSta(async () =>
+        {
+            using var fixture = new OfflineUpdates();
+            using var controller = fixture.Controller();
+            var panel = Panel(controller);
+            var window = new SettingsWindow(new AppSettings(), _ => throw new Exception("Update error saved settings"), panel, () => true);
+            var content = (UIElement)window.Content;
+            window.Content = null;
+            var root = new Border { Background = window.Background, Child = content };
+            window.Content = root;
+            window.ShowUpdates();
+            try
+            {
+                var status = Status(panel);
+                var peer = UIElementAutomationPeer.CreatePeerForElement(status)!;
+                Assert.Equal(UpdateStatus.Idle, controller.State.Status);
+                Assert.Equal(Visibility.Collapsed, status.Visibility);
+                controller.Dispose();
+                Click(Action(panel));
+                await Dispatcher.Yield(DispatcherPriority.ApplicationIdle);
+                Assert.Equal(UpdateStatus.Idle, controller.State.Status);
+                Assert.Equal(Visibility.Visible, status.Visibility);
+                Assert.StartsWith("The update action failed. ", status.Text);
+                Assert.Same(window.Resources["FieldError"], status.Foreground);
+                Assert.Equal(status.Text, peer.GetName());
+                Assert.Equal(AutomationLiveSetting.Polite, AutomationProperties.GetLiveSetting(status));
+                Assert.Equal(0, fixture.ListingRequests);
+                Assert.Equal(0, fixture.Launches);
+                Capture(root, "updates-action-failure-idle-offscreen.png");
+            }
+            finally { Unload(panel); window.Close(); }
+        });
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    public void UpdatePresentationDistinguishesCheckingAvailableUpToDateAndOfflineWithAccessibleActions(bool noRelease, bool offline)
+        => RunSta(async () =>
+        {
+            using var fixture = new OfflineUpdates { HoldListing = true, FailListing = offline };
+            using var controller = fixture.Controller(currentVersion: noRelease ? new(0, 2, 0) : new(0, 1, 0));
+            var panel = Panel(controller);
+            var window = new SettingsWindow(new AppSettings(), _ => throw new Exception("Update presentation saved settings"), panel, () => true);
+            var content = (UIElement)window.Content;
+            window.Content = null;
+            var root = new Border { Background = window.Background, Child = content };
+            window.Content = root;
+            window.ShowUpdates();
+            try
+            {
+                Capture(root, $"updates-idle-{noRelease}-{offline}-offscreen.png");
+                Task check = controller.CheckAsync();
+                await Until(controller, state => state.Status == UpdateStatus.Checking);
+                Assert.Equal("Checking...", Status(panel).Text);
+                Assert.False(Action(panel).IsEnabled);
+                Assert.Equal(Visibility.Visible, Cancel(panel).Visibility);
+                Capture(root, $"updates-checking-{noRelease}-{offline}-offscreen.png");
+                fixture.ListingGate.SetResult();
+                await check;
+                Assert.Equal(offline ? UpdateStatus.Error : noRelease ? UpdateStatus.UpToDate : UpdateStatus.Available, controller.State.Status);
+                Assert.True(Action(panel).IsEnabled);
+                Assert.Equal(Visibility.Collapsed, Cancel(panel).Visibility);
+                Assert.Equal(offline || noRelease ? "Check for updates" : "Download update", Action(panel).Content);
+                Assert.Equal(offline ? controller.State.Message : noRelease ? "You're up to date." : "Version 0.2.0 available.", Status(panel).Text);
+                Assert.Same(window.Resources[offline ? "FieldError" : noRelease ? "FieldFocus" : "FieldForeground"], Status(panel).Foreground);
+                Assert.Same(window.Resources["FieldSelection"], Action(panel).Background);
+                Assert.Same(window.Resources["FieldSelectionText"], Action(panel).Foreground);
+                Capture(root, $"updates-result-{noRelease}-{offline}-offscreen.png");
+                SettingsControlStyles.Apply(window.Resources, true);
+                root.UpdateLayout();
+                Assert.Equal(SystemColors.HighlightColor, ((SolidColorBrush)Action(panel).Background).Color);
+                Assert.Equal(SystemColors.HighlightTextColor, ((SolidColorBrush)Action(panel).Foreground).Color);
+                SettingsControlStyles.Apply(window.Resources, false);
+                Assert.Equal(0, fixture.Launches);
+            }
+            finally { Unload(panel); window.Close(); }
+        });
+
+    [Fact]
+    public void IdleShowsOneCheckActionWithoutRepeatingItAsStatus()
+        => RunSta(() =>
+        {
+            using var fixture = new OfflineUpdates();
+            using var controller = fixture.Controller();
+            var panel = Panel(controller);
+            try
+            {
+                Assert.Equal("Check for updates", Action(panel).Content);
+                Assert.Equal("", Status(panel).Text);
+                Assert.Equal(Visibility.Collapsed, Status(panel).Visibility);
+                Assert.True(Action(panel).IsEnabled);
+                Assert.Equal(0, fixture.ListingRequests);
+            }
+            finally { Unload(panel); }
+            return Task.CompletedTask;
+        });
+
     [Fact]
     public void SharedControllerCoalescesTwoConsumersAndPublishesStateOnDispatcher()
         => RunSta(async () =>
@@ -33,7 +137,7 @@ public sealed class UpdatePanelTests
                 Assert.False(Action(first).IsEnabled);
                 Assert.False(Action(second).IsEnabled);
                 Assert.True(Progress(first).IsIndeterminate == SystemParameters.ClientAreaAnimation);
-                Assert.Equal(controller.State.Message, Status(second).Text);
+                Assert.Equal("Checking...", Status(second).Text);
                 Click(Action(second));
                 Assert.Same(shared, controller.CheckAsync());
                 fixture.ListingGate.SetResult();
@@ -126,6 +230,22 @@ public sealed class UpdatePanelTests
         foreach (var panel in panels) panel.RaiseEvent(new RoutedEventArgs(FrameworkElement.UnloadedEvent));
     }
 
+    private static void Capture(FrameworkElement root, string name)
+    {
+        root.Measure(new Size(720, 480));
+        root.Arrange(new Rect(0, 0, 720, 480));
+        root.UpdateLayout();
+        string? directory = Environment.GetEnvironmentVariable("MISSIONVIEW_SETTINGS_FIXTURES");
+        if (directory == null) return;
+        Directory.CreateDirectory(directory);
+        var bitmap = new RenderTargetBitmap(720, 480, 96, 96, PixelFormats.Pbgra32);
+        bitmap.Render(root);
+        var encoder = new PngBitmapEncoder();
+        encoder.Frames.Add(BitmapFrame.Create(bitmap));
+        using var output = File.Create(Path.Combine(directory, name));
+        encoder.Save(output);
+    }
+
     private static async Task Until(UpdateController controller, Func<UpdateState, bool> predicate)
     {
         var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -172,6 +292,7 @@ public sealed class UpdatePanelTests
         private readonly UpdateService service;
         private string? launchedPath;
         internal bool HoldListing { get; init; }
+        internal bool FailListing { get; init; }
         internal bool HoldDownload { get; init; }
         internal TaskCompletionSource ListingGate { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         internal TaskCompletionSource DownloadGate { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -217,7 +338,7 @@ public sealed class UpdatePanelTests
             service = new UpdateService(new Handler(this));
         }
 
-        internal UpdateController Controller(System.Action? shutdown = null) => new(service, new(0, 1, 0), shutdown ?? (() => { }),
+        internal UpdateController Controller(System.Action? shutdown = null, UpdateVersion? currentVersion = null) => new(service, currentVersion ?? new(0, 1, 0), shutdown ?? (() => { }),
             path => { launchedPath = path; Launches++; return true; }, SynchronizationContext.Current, () => true);
 
         public void Dispose()
@@ -241,6 +362,7 @@ public sealed class UpdatePanelTests
                 {
                     Interlocked.Increment(ref fixture.ListingRequests);
                     if (fixture.HoldListing) await fixture.ListingGate.Task.WaitAsync(cancellationToken);
+                    if (fixture.FailListing) throw new HttpRequestException("Synthetic offline connection failure.");
                 }
                 bool installer = url == Downloads + Setup;
                 if (installer) Interlocked.Increment(ref fixture.InstallerRequests);

@@ -25,6 +25,9 @@ namespace WindowScatter
             }
             var parsed = HotkeyParser.Parse(text);
             if (keys != 1) throw new ArgumentException("The shortcut must contain exactly one non-modifier key.");
+            if (((parsed.ModifierKeys & 8) != 0 && parsed.VirtualKeyCode == 'L') ||
+                ((parsed.ModifierKeys & 3) == 3 && parsed.VirtualKeyCode == 0x2E))
+                throw new ArgumentException("Windows reserves this shortcut for system security. Choose another shortcut.");
             return new(parsed.ModifierKeys, parsed.VirtualKeyCode);
         }
     }
@@ -58,6 +61,20 @@ namespace WindowScatter
                 error = ex.Message;
                 return false;
             }
+        }
+
+        public static bool TryGetPreviewWarning(string normalText, string? appExposeText,
+            out string warning, out string error)
+        {
+            warning = "";
+            if (!TryParse(normalText, appExposeText, out var pair, out error)) return false;
+            var widgets = new OverviewHotkey(8, 'W');
+            warning = pair.Normal == widgets
+                ? "Opens MissionView instead of Widgets while MissionView is running."
+                : pair.AppExpose == widgets
+                    ? "Opens App Expose instead of Widgets while MissionView is running."
+                    : "Uses this shortcut for MissionView while it is running.";
+            return true;
         }
     }
 }
