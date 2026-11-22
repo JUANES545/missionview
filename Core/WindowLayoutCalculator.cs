@@ -96,6 +96,8 @@ namespace WindowScatter
             // Reserve independent anchors before moving colliding windows into free slots.
             var placed = anchors.Where(a => anchors.All(b => ReferenceEquals(a, b) ||
                 !Overlaps(a.X, a.Y, a, b, side, bottom))).ToList();
+            var grouped = TryPlaceGroups(anchors, placed, left, top, availableW, availableH, side, bottom);
+            if (grouped != null) return grouped;
             foreach (var layout in anchors)
             {
                 if (placed.Contains(layout)) continue;
@@ -124,6 +126,90 @@ namespace WindowScatter
                 }
                 if (!found) return null;
                 placed.Add(layout);
+            }
+            return anchors;
+        }
+
+        private static List<WindowLayout>? TryPlaceGroups(List<WindowLayout> anchors, List<WindowLayout> independent,
+            double left, double top, double availableW, double availableH, double side, double bottom)
+        {
+            var remaining = anchors.Except(independent).ToList();
+            var placed = independent.ToList();
+            var positions = new Dictionary<WindowLayout, (double X, double Y)>();
+            while (remaining.Count > 0)
+            {
+                var group = new List<WindowLayout> { remaining[0] };
+                remaining.RemoveAt(0);
+                for (int i = 0; i < group.Count; i++)
+                    foreach (var other in remaining.ToArray())
+                        if (Overlaps(group[i].X, group[i].Y, group[i], other, side, bottom))
+                        {
+                            group.Add(other);
+                            remaining.Remove(other);
+                        }
+                group = group.OrderBy(a => a.Window.OriginalRect.Top + a.OrigHeight / 2)
+                    .ThenBy(a => a.Window.OriginalRect.Left + a.OrigWidth / 2)
+                    .ThenBy(a => a.Window.Handle.ToInt64()).ToList();
+                double bestDistance = double.PositiveInfinity;
+                Dictionary<WindowLayout, (double X, double Y)>? best = null;
+                // Bounded compact row shapes; an unfittable envelope keeps the existing fallback.
+                for (int columns = 1; columns <= group.Count; columns++)
+                {
+                    var rows = group.Chunk(columns).ToArray();
+                    double groupW = rows.Max(row => row.Sum(a => a.Width) + (row.Length - 1) * 2 * side);
+                    double groupH = rows.Sum(row => row.Max(a => a.Height)) + (rows.Length - 1) * (side + bottom);
+                    if (groupW > availableW || groupH > availableH) continue;
+                    var offsets = new Dictionary<WindowLayout, (double X, double Y)>();
+                    double rowY = 0;
+                    foreach (var row in rows)
+                    {
+                        double rowH = row.Max(a => a.Height);
+                        double rowW = row.Sum(a => a.Width) + (row.Length - 1) * 2 * side;
+                        double rowX = (groupW - rowW) / 2;
+                        foreach (var a in row.OrderBy(a => a.Window.OriginalRect.Left + a.OrigWidth / 2)
+                            .ThenBy(a => a.Window.Handle.ToInt64()))
+                        {
+                            offsets[a] = (rowX, rowY + (rowH - a.Height) / 2);
+                            rowX += a.Width + 2 * side;
+                        }
+                        rowY += rowH + side + bottom;
+                    }
+                    double anchorX = group.Average(a => a.X - offsets[a].X);
+                    double anchorY = group.Average(a => a.Y - offsets[a].Y);
+                    double maxX = Math.Max(left, left + availableW - groupW);
+                    double maxY = Math.Max(top, top + availableH - groupH);
+                    var xs = new List<double> { anchorX, left, maxX };
+                    var ys = new List<double> { anchorY, top, maxY };
+                    foreach (var other in placed)
+                    {
+                        xs.AddRange(new[] { other.X - groupW - 2 * side, other.X + other.Width + 2 * side });
+                        ys.AddRange(new[] { other.Y - groupH - side - bottom, other.Y + other.Height + side + bottom });
+                    }
+                    var envelope = new WindowLayout { Width = groupW, Height = groupH };
+                    var candidateXs = xs.Select(x => Math.Clamp(x, left, maxX)).Distinct().OrderBy(x => x).ToArray();
+                    var candidateYs = ys.Select(y => Math.Clamp(y, top, maxY)).Distinct().OrderBy(y => y).ToArray();
+                    foreach (double x in candidateXs)
+                    foreach (double y in candidateYs)
+                    {
+                        if (placed.Any(o => Overlaps(x, y, envelope, o, side, bottom))) continue;
+                        double distance = group.Sum(a => Math.Pow(x + offsets[a].X - a.X, 2) +
+                            Math.Pow(y + offsets[a].Y - a.Y, 2));
+                        if (distance >= bestDistance) continue;
+                        bestDistance = distance;
+                        best = group.ToDictionary(a => a, a => (x + offsets[a].X, y + offsets[a].Y));
+                    }
+                }
+                if (best == null) return null;
+                foreach (var a in group)
+                {
+                    positions[a] = best[a];
+                    placed.Add(new WindowLayout { X = best[a].X, Y = best[a].Y, Width = a.Width, Height = a.Height });
+                }
+            }
+            foreach (var (layout, position) in positions)
+            {
+                layout.X = position.X;
+                layout.Y = position.Y;
             }
             return anchors;
         }

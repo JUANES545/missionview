@@ -106,7 +106,8 @@ public class LayoutTests
         var left = layouts.Single(l => l.Window.Handle == new IntPtr(1));
         var right = layouts.Single(l => l.Window.Handle == new IntPtr(2));
         Assert.True(right.X >= left.X + left.Width + 28);
-        Assert.Equal(730, right.X, 7);
+        Assert.Equal(280, left.X, 7);
+        Assert.Equal(710, right.X, 7);
         Assert.Equal(250, right.Y, 7);
         Assert.Equal(400, right.Width);
         VerifyGeometry(layouts, 1920, 1080);
