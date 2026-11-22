@@ -24,11 +24,13 @@ namespace WindowScatter
 
         public List<WindowInfo> EnumerateVisibleWindows(MonitorHelper.MonitorBounds targetMonitor,
             IReadOnlyList<MonitorHelper.MonitorBounds> monitors) =>
-            EnumerateByMonitor(monitors).GetValueOrDefault(targetMonitor.Handle) ?? new();
+            EnumerateByMonitor(monitors, showMinimizedWindows: false).GetValueOrDefault(targetMonitor.Handle) ?? new();
 
         public Dictionary<IntPtr, List<WindowInfo>> EnumerateByMonitor(IReadOnlyList<MonitorHelper.MonitorBounds> monitors,
-            AppExposeRequest? request = null)
+            AppExposeRequest? request = null, bool showMinimizedWindows = true,
+            IReadOnlyList<MonitorHelper.MonitorBounds>? visibleMonitors = null)
         {
+            visibleMonitors ??= monitors;
             var windows = new List<(IntPtr Monitor, WindowInfo Window)>();
 
 #if ENUMERATION_DIAGNOSTICS
@@ -43,7 +45,7 @@ namespace WindowScatter
                     uint thread = GetWindowThreadProcessId(h, out uint process);
                     if (thread == 0 || process == 0) return true;
                     bool minimized = IsIconic(h);
-                    if (minimized && request == null) return true;
+                    if (minimized && (request == null || !showMinimizedWindows)) return true;
 
                     int extendedStyle = GetWindowLong(h, GWL_EXSTYLE);
                     if (extendedStyle == 0 && Marshal.GetLastWin32Error() != 0)
@@ -117,7 +119,7 @@ namespace WindowScatter
             if (!enumerationSucceeded)
                 throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error(), "Could not enumerate windows.");
 
-            var grouped = GroupByMonitor(windows, monitors, request);
+            var grouped = GroupByMonitor(windows, visibleMonitors, request, showMinimizedWindows);
 
 #if ENUMERATION_DIAGNOSTICS
             diagnostics.Write(System.IO.Path.Combine(AppContext.BaseDirectory, WindowEnumerationDiagnostics.FileName),
@@ -128,14 +130,16 @@ namespace WindowScatter
 
         internal static Dictionary<IntPtr, List<WindowInfo>> GroupByMonitor(
             IEnumerable<(IntPtr Monitor, WindowInfo Window)> windows,
-            IReadOnlyList<MonitorHelper.MonitorBounds> monitors, AppExposeRequest? request = null)
+            IReadOnlyList<MonitorHelper.MonitorBounds> monitors, AppExposeRequest? request = null,
+            bool showMinimizedWindows = true)
         {
             var grouped = monitors.ToDictionary(m => m.Handle, _ => new List<WindowInfo>());
             foreach (var item in windows)
             {
-                if (request != null && !request.Includes(item.Window.Identity)) continue;
                 if (grouped.TryGetValue(item.Monitor, out var group))
                 {
+                    if (item.Window.WasMinimized && (request == null || !showMinimizedWindows)) continue;
+                    if (request != null && !request.Includes(item.Window.Identity)) continue;
                     if (group.Count < MAX_WINDOWS) group.Add(item.Window);
                     else request?.RecordWindowOverLimit();
                 }

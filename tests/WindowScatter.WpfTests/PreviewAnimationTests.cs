@@ -138,8 +138,10 @@ public class PreviewAnimationTests
             Assert.Equal((40d, 50d, 1200d, 600d), (thumb.StartX, thumb.StartY, thumb.StartWidth, thumb.StartHeight));
         });
 
-    [Fact]
-    public void LiveReducedMotionStillCompletesPreviewAtRequestedBounds()
+    [Theory]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    public void LiveReducedMotionStillCompletesPreviewAtRequestedBounds(bool reduceAnimations, bool systemAnimation)
         => RunSta(() =>
         {
             var thumb = Thumb();
@@ -147,7 +149,7 @@ public class PreviewAnimationTests
             manager.SetMotionEnabled(true);
             var frame = new DispatcherFrame();
             manager.StartPreviewAnimation(thumb.WindowHandle, new(10, 30, 1400, 700), _ => frame.Continue = false);
-            manager.SetMotionEnabled(false);
+            manager.SetMotionEnabled(new AppSettings { ReduceAnimations = reduceAnimations }.AllowsMotion(systemAnimation));
             Pump(frame, manager);
             Assert.Equal(new PreviewBounds(10, 30, 1400, 700),
                 new PreviewBounds(thumb.CurrentX, thumb.CurrentY, thumb.CurrentWidth, thumb.CurrentHeight));

@@ -31,6 +31,11 @@ internal static class SettingsControlStyles
               <Style TargetType="CheckBox">
                 <Setter Property="Foreground" Value="{DynamicResource FieldForeground}"/>
                 <Setter Property="VerticalContentAlignment" Value="Center"/>
+                <Setter Property="ContentTemplate">
+                  <Setter.Value>
+                    <DataTemplate><TextBlock Text="{Binding}" TextWrapping="Wrap"/></DataTemplate>
+                  </Setter.Value>
+                </Setter>
                 <Setter Property="Template">
                   <Setter.Value>
                     <ControlTemplate TargetType="CheckBox">

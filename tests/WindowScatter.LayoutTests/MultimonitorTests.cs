@@ -5,6 +5,107 @@ using static WindowScatter.Win32Interop;
 
 public class MultimonitorTests
 {
+    [Theory]
+    [InlineData("All", true, false)]
+    [InlineData("All", false, false)]
+    [InlineData("Current", true, false)]
+    [InlineData("Current", false, false)]
+    [InlineData("All", true, true)]
+    [InlineData("All", false, true)]
+    [InlineData("Current", true, true)]
+    [InlineData("Current", false, true)]
+    public void ScopeAndMinimizedFilterFeedActualLayoutAndSessionNavigation(string scope, bool showMinimized, bool appExpose)
+    {
+        var left = new MonitorHelper.MonitorBounds
+        { Handle = new(1), Left = -1920, Top = -240, Width = 1920, Height = 1080, DpiScale = 1.5 };
+        var right = new MonitorHelper.MonitorBounds
+        { Handle = new(2), Width = 2560, Height = 1440, DpiScale = 2 };
+        var topology = new[] { left, right };
+        var visible = MonitorHelper.OverviewMonitors(topology, scope, left.Handle);
+        var crossingRect = new RECT { Left = -100, Top = 100, Right = 500, Bottom = 600 };
+        Assert.Null(WindowEnumerator.CreateWindowInfo(new(90), "Crossing", false, crossingRect, false, 0, left, topology));
+        var crossing = WindowEnumerator.CreateWindowInfo(new(90), "Crossing", false, crossingRect, false, 0, right, topology)!;
+        crossing.Identity = new(new(90), 1, 1);
+        WindowInfo Normal(int id, MonitorHelper.MonitorBounds m)
+        {
+            var window = WindowEnumerator.CreateWindowInfo(new(id), $"Normal {id}", false,
+                new RECT { Left = m.Left + 100, Top = m.Top + 100, Right = m.Left + 700, Bottom = m.Top + 500 },
+                false, 0, m, topology)!;
+            window.Identity = new(new(id), 1, 1);
+            return window;
+        }
+        var placement = new WINDOWPLACEMENT
+        { showCmd = 2, rcNormalPosition = new RECT { Left = -1700, Top = 100, Right = -1100, Bottom = 500 } };
+        var minimized = WindowEnumerator.CreateMinimizedWindowInfo(new(10), "Minimized", placement, 0, left)!;
+        minimized.Identity = new(new(10), 1, 1);
+        var unrelated = Normal(50, left);
+        var request = appExpose ? AppExposeRequest.Capture(() => minimized.Identity, _ => false,
+            t => ApplicationIdentity.Create(t.Handle == unrelated.Handle ? @"C:\Other.exe" : @"C:\App.exe", null, null)) : null;
+        var groups = WindowEnumerator.GroupByMonitor(
+            [(left.Handle, Normal(1, left)), (left.Handle, minimized), (left.Handle, unrelated),
+             (right.Handle, Normal(2, right)), (right.Handle, crossing)], visible, request, showMinimized);
+        Assert.Equal(scope == "All" ? 2 : 1, groups.Count);
+        Assert.Equal(appExpose && showMinimized, groups[left.Handle].Any(w => w.Handle == minimized.Handle));
+        Assert.Equal(!appExpose, groups[left.Handle].Any(w => w.Handle == unrelated.Handle));
+        var snapshots = visible.Select(m =>
+        {
+            var normal = new WindowLayoutCalculator().CalculateLayouts(groups[m.Handle].Where(w => !w.WasMinimized).ToList(),
+                m.Width, m.Height, m.DpiScale).Select(l => new NavigationTarget(l.Window.Identity,
+                    new(m.Left + l.X, m.Top + l.Y, l.Width, l.Height))).ToArray();
+            var shelf = groups[m.Handle].Where(w => w.WasMinimized).Select(w => new NavigationTarget(w.Identity,
+                new(m.Left + 100, m.Bottom - 100, 240, 46))).ToArray();
+            return new OverviewDisplaySnapshot(m.Handle, new(m.Left, m.Top, m.Width, m.Height), normal, shelf, shelf);
+        }).ToArray();
+        var session = new OverviewSession();
+        var expected = groups.Values.SelectMany(w => w).Select(w => w.Handle).ToHashSet();
+        var visited = new HashSet<IntPtr>();
+        for (int i = 0; i < expected.Count; i++)
+        {
+            var next = session.SelectTab(snapshots, 1);
+            Assert.Contains(next.Handle, expected);
+            visited.Add(next.Handle);
+            session.Select(next.Handle);
+        }
+        Assert.True(expected.SetEquals(visited));
+        Assert.Equal(2, placement.showCmd);
+        Assert.True(minimized.WasMinimized);
+        Assert.Equal(scope == "All", visited.Contains(crossing.Handle));
+        Assert.True(MonitorHelper.SameTopology(topology, [left, right]));
+        Assert.Equal(scope == "All" ? new IntPtr[] { new(1), new(2) } : new IntPtr[] { new(1) },
+            visible.Select(m => m.Handle));
+    }
+
+    [Fact]
+    public void HiddenMinimizedAndOtherDisplaysNeverConsumeCapacityOrIdentityLookups()
+    {
+        var monitor = new MonitorHelper.MonitorBounds { Handle = new(1) };
+        var reads = new List<IntPtr>();
+        var identity = ApplicationIdentity.Create(@"C:\App.exe", null, null);
+        var request = AppExposeRequest.Capture(() => new(new(100), 1, 1), _ => false,
+            t => { reads.Add(t.Handle); return identity; });
+        reads.Clear();
+        var candidates = Enumerable.Range(1, 25).Select(i => (new IntPtr(1),
+            new WindowInfo { Handle = new(i), Identity = new(new(i), 1, 1), WasMinimized = true }))
+            .Concat(Enumerable.Range(30, 20).Select(i => (new IntPtr(1),
+                new WindowInfo { Handle = new(i), Identity = new(new(i), 1, 1) })))
+            .Append((new(2), new WindowInfo { Handle = new(90), Identity = new(new(90), 1, 1) }));
+        var windows = Assert.Single(WindowEnumerator.GroupByMonitor(candidates, [monitor], request, false)).Value;
+        Assert.Equal(20, windows.Count);
+        Assert.Equal(Enumerable.Range(30, 20).Select(i => new IntPtr(i)), windows.Select(w => w.Handle));
+        Assert.Equal(windows.Select(w => w.Handle), reads);
+        Assert.Equal(0, request.WindowsOverLimit);
+        Assert.Equal(0, request.UnidentifiedWindows);
+    }
+
+    [Fact]
+    public void MissingPointerMonitorRejectsCurrentInsteadOfOpeningAnInvisibleFallback()
+    {
+        Assert.Throws<InvalidOperationException>(() => MonitorHelper.OverviewMonitors(
+            [new() { Handle = new(1) }], "Current", new(2)));
+        Assert.Throws<ArgumentException>(() => MonitorHelper.OverviewMonitors(
+            [new() { Handle = new(1) }], "Primary", new(1)));
+    }
+
     [Fact]
     public void AddingViewsCannotRecaptureThePreviousApplication()
     {

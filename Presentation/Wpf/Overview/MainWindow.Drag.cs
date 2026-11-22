@@ -55,7 +55,8 @@ public partial class MainWindow
         {
             bool inside = ReferenceEquals(view, destination);
             bool valid = inside && !ReferenceEquals(view, dragSource) && view.enumeratedWindowCount < 20;
-            view.MoveStatus.Text = inside ? ReferenceEquals(view, dragSource) ? "Move to another display; Esc cancels" :
+            view.MoveStatus.Text = inside ? ReferenceEquals(view, dragSource)
+                ? views.Count > 1 ? "Move to another display; Esc cancels" : "Only this display is shown; Esc cancels" :
                 valid ? "Release to move here" : "Display already shows 20 windows" : view.IdleMoveStatus;
             view.dragPreview!.Update(image, view.DragMonitorBounds);
         }

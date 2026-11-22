@@ -23,14 +23,16 @@ namespace WindowScatter
         private readonly WrapPanel wrap;
         private readonly double scale, left, top;
         private readonly Action<IntPtr> select;
+        private readonly Func<bool> effectsEnabled;
         private readonly List<MinimizedWindowButton> buttons = [];
 
         public MinimizedWindowStrip(IReadOnlyList<WindowInfo> windows, double width, double displayHeight, double scale,
             Action<IntPtr> clicked, Action<IntPtr> hovered, Func<IntPtr, ImageSource?>? readIcon = null,
-            Action<IntPtr>? selected = null)
+            Action<IntPtr>? selected = null, Func<bool>? effectsEnabled = null)
         {
             if (!double.IsFinite(scale) || scale <= 0) throw new ArgumentOutOfRangeException(nameof(scale));
             select = selected ?? (handle => SetSelected(handle));
+            this.effectsEnabled = effectsEnabled ?? (() => true);
             this.scale = scale;
             Geometry = MinimizedShelfGeometry.Calculate(width, displayHeight, windows.Count, SystemParameters.VerticalScrollBarWidth);
             left = (width - Geometry.Width) / 2;
@@ -194,7 +196,7 @@ namespace WindowScatter
 
         internal void ApplyPalette(bool highContrast)
         {
-            bool effects = !highContrast && SystemParameters.ClientAreaAnimation;
+            bool effects = !highContrast && SystemParameters.ClientAreaAnimation && effectsEnabled();
             Resources["Shelf"] = highContrast ? SystemColors.WindowBrush : effects ? SharedBrushes.Dock : SharedBrushes.Graphite;
             Effect = effects ? new DropShadowEffect { BlurRadius = 20, ShadowDepth = 4, Opacity = .24, Color = Colors.Black } : null;
             Resources["Item"] = highContrast ? SystemColors.WindowBrush : SharedBrushes.Raised;

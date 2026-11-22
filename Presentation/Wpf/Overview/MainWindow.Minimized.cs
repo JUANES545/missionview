@@ -8,15 +8,47 @@ namespace WindowScatter
         private MinimizedWindowStrip? minimizedStrip;
         private IEnumerable<WindowThumb> ViewThumbs => windowThumbs.Concat(minimizedStrip?.Thumbs ?? []);
         private double OverviewContentHeight => monitorPixelHeight - (minimizedStrip?.Geometry.ReservedHeight ?? 0) * currentDpiScale;
+        private bool IncludeMinimizedWindows => coordinator.appExposeRequest != null && coordinator.showMinimizedWindows;
+
+        private void RebuildThumbnails(IReadOnlyList<IntPtr> sourceOrder, List<WindowInfo> windows, bool settled)
+        {
+            windows = windows.Where(w => IncludeMinimizedWindows || !w.WasMinimized).ToList();
+            InvalidateNavigation();
+            animationManager.StopAllAnimations();
+            thumbnailManager.CleanupAllThumbnails();
+            enumeratedWindowCount = windows.Count;
+            RebuildMinimizedStrip(windows, settled);
+            RefreshOverviewPresentation(SystemParameters.HighContrast, SystemParameters.ClientAreaAnimation);
+            var layouts = new WindowLayoutCalculator().CalculateLayouts(windows.Where(w => !w.WasMinimized).ToList(),
+                monitor.Width, OverviewContentHeight, currentDpiScale, settings.ThumbnailSize);
+            thumbnailManager.SourceOrder = sourceOrder;
+            thumbnailManager.RegisterThumbnails(layouts, animationManager, currentDpiScale, settled);
+            windowSwitcher = new WindowSwitcher(thumbnailManager, animationManager, windowThumbs, layouts);
+            if (coordinator.selectedWindowHandle != IntPtr.Zero && coordinator.ViewFor(coordinator.selectedWindowHandle) == null)
+                coordinator.SelectWindow(IntPtr.Zero);
+            ChromeCanvas.Visibility = Visibility.Visible;
+            string destinationHint = views.Count > 1 ? "\nDrop a window here." : "";
+            EmptyMessage.Text = windows.Count == 0 ? coordinator.appExposeRequest != null
+                ? "No windows from this application on this display." + destinationHint
+                : "No windows on this display." + destinationHint :
+                "Window previews unavailable." + destinationHint;
+            EmptyMessage.Visibility = !ViewThumbs.Any() ? Visibility.Visible : Visibility.Hidden;
+            MoveStatus.Text = IdleMoveStatus;
+            if (!settled) return;
+            thumbnailManager.SyncClickBordersToThumbs(currentDpiScale);
+            thumbnailManager.SetPreviewAnimating(false);
+            animationManager.StartKeepAlive();
+        }
 
         private void RebuildMinimizedStrip(List<WindowInfo> windows, bool settled)
         {
             CleanupMinimizedStrip();
+            if (!IncludeMinimizedWindows) return;
             var minimized = windows.Where(w => w.WasMinimized).ToList();
             if (minimized.Count == 0) return;
             minimizedStrip = new MinimizedWindowStrip(minimized, monitor.Width / currentDpiScale,
                 monitor.Height / currentDpiScale, currentDpiScale, OnMinimizedClicked, OnWindowHovered,
-                selected: handle =>
+                effectsEnabled: () => !settings.ReduceAnimations, selected: handle =>
                 {
                     if (!scatterInteraction.IsOpen || AnyAnimating || isScatterActive || isTransitioning ||
                         coordinator.movingWindow || coordinator.navigationPending || coordinator.drag.IsPressed)
@@ -37,8 +69,14 @@ namespace WindowScatter
 
         private void CleanupMinimizedStrip()
         {
-            if (minimizedStrip != null) ChromeCanvas.Children.Remove(minimizedStrip);
+            if (minimizedStrip != null)
+            {
+                minimizedStrip.IsEnabled = false;
+                minimizedStrip.SetSelected(IntPtr.Zero);
+                ChromeCanvas.Children.Remove(minimizedStrip);
+            }
             minimizedStrip = null;
+            InvalidateNavigation();
         }
     }
 }

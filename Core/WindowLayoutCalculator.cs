@@ -11,10 +11,17 @@ namespace WindowScatter
         internal const double ToolbarHeight = 64;
 
         public List<WindowLayout> CalculateLayouts(List<WindowInfo> windows, double screenW, double screenH,
-            double dpiScale = 1)
+            double dpiScale = 1, string thumbnailSize = "Standard")
         {
             if (!double.IsFinite(screenW + screenH + dpiScale) || screenW <= 0 || screenH <= 0 || dpiScale <= 0)
                 throw new ArgumentOutOfRangeException(nameof(screenW), "Screen dimensions and DPI must be finite and positive.");
+            double maximumScale = thumbnailSize switch
+            {
+                "Compact" => .35,
+                "Standard" => .5,
+                "Large" => .75,
+                _ => throw new ArgumentException("Unsupported thumbnail size.", nameof(thumbnailSize))
+            };
             if (windows.Count == 0) return new();
             if (windows.Any(w => Width(w) <= 0 || Height(w) <= 0))
                 throw new ArgumentException("Window dimensions must be positive.", nameof(windows));
@@ -33,7 +40,7 @@ namespace WindowScatter
             {
                 var rows = ordered.Chunk(columns).ToArray();
                 double height = rows.Sum(row => row.Max(Height));
-                double scale = Math.Min(.5, (availableH - (rows.Length - 1) * (side + bottom)) / height);
+                double scale = Math.Min(maximumScale, (availableH - (rows.Length - 1) * (side + bottom)) / height);
                 foreach (var row in rows)
                     scale = Math.Min(scale, (availableW - (row.Length - 1) * 2 * side) / row.Sum(Width));
                 if (scale <= 0) continue;
@@ -54,7 +61,7 @@ namespace WindowScatter
                 .ThenBy(w => w.OriginalRect.Left + Width(w) / 2)
                 .ThenBy(w => w.OriginalRect.Top + Height(w) / 2)
                 .ThenBy(w => w.Handle.ToInt64()).ToList();
-            double searchScale = Math.Min(.5,
+            double searchScale = Math.Min(maximumScale,
                 windows.Min(w => Math.Min(availableW / Width(w), availableH / Height(w))));
             while (true)
             {

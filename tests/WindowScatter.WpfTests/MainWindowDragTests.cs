@@ -9,6 +9,34 @@ using static WindowScatter.Win32Interop;
 public class MainWindowDragTests
 {
     [Theory]
+    [InlineData(1)]
+    [InlineData(2)]
+    public void CurrentScopeHasNoInvisibleDragDestinationAndNeverMovesTheNativeSource(int pointer) => RunSta(() =>
+    {
+        using var app = new MainWindow();
+        app.OpenDisplays(
+            [new() { Handle = new(1), Left = -1000, Top = -200, Width = 1000, Height = 800, DpiScale = 1.5 },
+             new() { Handle = new(2), Width = 1000, Height = 800, DpiScale = 2 }],
+            new AppSettings { OverviewMonitorScope = "Current" }, new(pointer));
+        var thumb = app.AddNativeThumb(100, 300, 200, 100);
+        app.ShowFixture();
+        Assert.True(GetWindowRect(thumb.WindowHandle, out var before));
+        app.BeginFixtureDrag(thumb, .5, .5);
+        int invisibleX = pointer == 1 ? 500 : -500;
+        app.DrawFixtureDrag(invisibleX, 400);
+        Assert.Equal(1, app.DragSurfaceCount);
+        Assert.Throws<InvalidOperationException>(() => app.FinishFixtureDrag(invisibleX, 400));
+        Assert.False(app.DragPressed);
+        Assert.Equal(0, app.DragSurfaceCount);
+        Assert.True(GetWindowRect(thumb.WindowHandle, out var after));
+        Assert.Equal(before, after);
+        Assert.False(IsIconic(thumb.WindowHandle));
+        Assert.Equal(0, app.ActivationRequests);
+        Assert.Equal(new IntPtr(pointer), app.CurrentDisplay);
+        Assert.Single(app.Snapshot());
+    });
+
+    [Theory]
     [InlineData(1, 1.5)]
     [InlineData(1.5, 2)]
     [InlineData(2, 1)]

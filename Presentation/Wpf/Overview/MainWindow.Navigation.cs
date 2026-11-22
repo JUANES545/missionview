@@ -137,6 +137,8 @@ namespace WindowScatter
         private void SelectWindow(IntPtr windowHandle, bool keyboard = false, bool revealMinimized = false)
         {
             if (!IsCoordinator) { coordinator.SelectWindow(windowHandle, keyboard, revealMinimized); return; }
+            if (windowHandle != IntPtr.Zero && ViewFor(windowHandle) == null)
+                throw new InvalidOperationException("The selected window is no longer available in this overview.");
             bool changed = session.Select(windowHandle);
             foreach (var view in views) view.thumbnailManager?.SetAutomationSelection(windowHandle);
             if (!changed)
