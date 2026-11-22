@@ -13,6 +13,29 @@ public class LayoutTests
     private static List<WindowLayout> Calculate(List<WindowInfo> windows, double w = 1920, double h = 1080)
         => new WindowLayoutCalculator().CalculateLayouts(windows, w, h);
 
+    [Theory]
+    [InlineData("Compact", .35, 1.5)]
+    [InlineData("Standard", .5, 2)]
+    [InlineData("Large", .75, 1.25)]
+    public void RequestedSizesChangeActualLayoutAndKeepChromeWithinMixedDpiDisplays(string size, double cap, double dpi)
+    {
+        var calculator = new WindowLayoutCalculator();
+        var window = Win(1, 100, 100, 600, 400);
+        var layout = Assert.Single(calculator.CalculateLayouts([window], 1920, 1080, dpi, size));
+        Assert.Equal(600 * cap, layout.Width, 8);
+        Assert.Equal(400 * cap, layout.Height, 8);
+        VerifyChrome([layout], 1920, 1080, dpi);
+        var dense = calculator.CalculateLayouts(Enumerable.Range(1, 20).Select(i => Win(i, 0, 0, 1600, 900)).ToList(),
+            960, 600, dpi, size);
+        Assert.All(dense, item =>
+        {
+            Assert.InRange(item.Width / 1600, double.Epsilon, cap);
+            Assert.Equal(item.Width / 1600, item.Height / 900, 8);
+        });
+        VerifyChrome(dense, 960, 600, dpi);
+        Assert.Throws<ArgumentException>(() => calculator.CalculateLayouts([window], 1920, 1080, dpi, "Huge"));
+    }
+
     private static void VerifyGeometry(List<WindowLayout> layouts, double w, double h)
     {
         double? scale = null;

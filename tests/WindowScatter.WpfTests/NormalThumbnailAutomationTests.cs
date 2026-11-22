@@ -7,6 +7,7 @@ using System.Windows.Interop;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
+using System.Windows.Media.Effects;
 using System.Windows.Threading;
 using WindowScatter;
 using Xunit;
@@ -24,6 +25,10 @@ public class NormalThumbnailAutomationTests
             var thumb = new WindowThumb { WindowHandle = new(1), ClickBorder = target, HighlightBorder = frame, TitleLabel = label };
             var manager = new ThumbnailManager(new Canvas(), [thumb], IntPtr.Zero, _ => { }, _ => { });
             manager.ApplyPalette(false, false);
+            Assert.Equal(Colors.White, ((SolidColorBrush)frame.BorderBrush).Color);
+            Assert.Null(label.Background);
+            Assert.Equal(Colors.White, ((SolidColorBrush)label.Foreground).Color);
+            Assert.Null(label.Effect);
             label.Measure(new Size(300, 20));
             label.Arrange(new Rect(0, 0, 300, 20));
             var bounds = label.RenderSize;
@@ -33,16 +38,64 @@ public class NormalThumbnailAutomationTests
             Assert.Equal(13, label.FontSize);
             Assert.Equal(1, frame.Opacity);
             Assert.Null(frame.Effect);
+            Assert.Null(label.Effect);
             manager.ApplyPalette(true, true);
             Assert.Equal(SystemColors.HighlightColor, ((SolidColorBrush)frame.BorderBrush).Color);
             Assert.Equal(SystemColors.WindowTextColor, ((SolidColorBrush)label.Foreground).Color);
-            Assert.Equal(SystemColors.WindowColor, ((SolidColorBrush)label.Background).Color);
+            Assert.Equal(SystemColors.WindowColor, Assert.IsType<SolidColorBrush>(label.Background).Color);
             Assert.Null(frame.Effect);
             manager.SetSelectedWindow(IntPtr.Zero);
             label.UpdateLayout();
             Assert.Equal(bounds, label.RenderSize);
             Assert.Equal(0, frame.Opacity);
             Assert.Equal(title, UIElementAutomationPeer.CreatePeerForElement(target)!.GetName());
+            manager.ApplyPalette(false, true);
+            Assert.Null(label.Background);
+            Assert.Equal(Colors.White, ((SolidColorBrush)label.Foreground).Color);
+            Assert.IsType<DropShadowEffect>(label.Effect);
+            label.UpdateLayout();
+            Assert.Equal(bounds, label.RenderSize);
+            manager.ApplyPalette(false, false);
+            Assert.Null(label.Effect);
+        });
+
+    [Theory]
+    [InlineData("White", 255, 255, 255)]
+    [InlineData("Blue", 0, 120, 215)]
+    [InlineData("Mint", 125, 219, 155)]
+    public void SelectionColorSurvivesHighContrastAndReducedMotionWithoutChangingTargets(string color, byte r, byte g, byte b)
+        => RunSta(() =>
+        {
+            var settings = new AppSettings { SelectionBorderColor = color };
+            var target = new OverviewThumbnail("Complete window title");
+            var label = new TextBlock { Text = "Complete window title", Width = 300, Height = 20, FontSize = 13 };
+            var frame = new Border { Width = 310, Height = 210, Child = new Border() };
+            var thumb = new WindowThumb { WindowHandle = new(1), ClickBorder = target, TitleLabel = label, HighlightBorder = frame,
+                CurrentX = 20, CurrentY = 40, CurrentWidth = 600, CurrentHeight = 400 };
+            var manager = new ThumbnailManager(new Canvas(), [thumb], IntPtr.Zero, _ => { }, _ => { },
+                selectionBorderColor: () => settings.SelectionBorderColor, effectsEnabled: () => !settings.ReduceAnimations);
+            manager.SyncClickBordersToThumbs(2);
+            manager.SetSelectedWindow(new(1));
+            manager.SetAutomationSelection(new(1));
+            manager.ApplyPalette(false, true);
+            Assert.Equal(Color.FromRgb(r, g, b), ((SolidColorBrush)frame.BorderBrush).Color);
+            Assert.Equal(1, frame.Opacity);
+            manager.ApplyPalette(true, true);
+            Assert.Same(SystemColors.HighlightBrush, frame.BorderBrush);
+            Assert.Same(SystemColors.WindowBrush, label.Background);
+            settings.ReduceAnimations = true;
+            manager.ApplyPalette(false, true);
+            Assert.Equal(Color.FromRgb(r, g, b), ((SolidColorBrush)frame.BorderBrush).Color);
+            Assert.Null(frame.Effect);
+            Assert.Null(label.Effect);
+            Assert.Null(label.Background);
+            Assert.Equal((300d, 200d, 310d, 210d, 13d), (target.Width, target.Height, frame.Width, frame.Height, label.FontSize));
+            var peer = UIElementAutomationPeer.CreatePeerForElement(target)!;
+            Assert.Equal("Complete window title", peer.GetName());
+            Assert.True(Assert.IsAssignableFrom<ISelectionItemProvider>(peer.GetPattern(PatternInterface.SelectionItem)).IsSelected);
+            settings.SelectionBorderColor = "Blue";
+            manager.ApplyPalette(false, false);
+            Assert.Equal(Color.FromRgb(0, 120, 215), ((SolidColorBrush)frame.BorderBrush).Color);
         });
 
     [Fact]
@@ -54,6 +107,12 @@ public class NormalThumbnailAutomationTests
             var thumb = Assert.Single(app.RegisterNormalWindows(title));
             Assert.Equal(129, title.Length);
             Assert.Equal(80, thumb.TitleLabel.Text.Length);
+            if (!SystemParameters.HighContrast)
+            {
+                Assert.Null(thumb.TitleLabel.Background);
+                Assert.Equal(new Thickness(0), thumb.TitleLabel.Padding);
+                Assert.Equal(Colors.White, ((SolidColorBrush)thumb.TitleLabel.Foreground).Color);
+            }
             Assert.Equal(title, AutomationProperties.GetName(thumb.ClickBorder));
             var peer = UIElementAutomationPeer.CreatePeerForElement(thumb.ClickBorder);
             Assert.NotNull(peer);

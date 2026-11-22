@@ -54,31 +54,6 @@ namespace WindowScatter
             RebuildThumbnails(sourceOrder, windows, settled: false);
         }
 
-        private void RebuildThumbnails(IReadOnlyList<IntPtr> sourceOrder, List<WindowInfo> windows, bool settled)
-        {
-            InvalidateNavigation();
-            animationManager.StopAllAnimations();
-            thumbnailManager.CleanupAllThumbnails();
-            enumeratedWindowCount = windows.Count;
-            RebuildMinimizedStrip(windows, settled);
-            var layouts = new WindowLayoutCalculator().CalculateLayouts(windows.Where(w => !w.WasMinimized).ToList(),
-                monitor.Width, OverviewContentHeight, currentDpiScale);
-            thumbnailManager.SourceOrder = sourceOrder;
-            thumbnailManager.RegisterThumbnails(layouts, animationManager, currentDpiScale, settled);
-            windowSwitcher = new WindowSwitcher(thumbnailManager, animationManager, windowThumbs, layouts);
-            ChromeCanvas.Visibility = Visibility.Visible;
-            EmptyMessage.Text = windows.Count == 0 ? coordinator.appExposeRequest != null
-                ? "No windows from this application on this display.\nDrop a window here."
-                : "No windows on this display.\nDrop a window here." :
-                "Window previews unavailable.\nDrop a window here.";
-            EmptyMessage.Visibility = !ViewThumbs.Any() ? Visibility.Visible : Visibility.Hidden;
-            MoveStatus.Text = IdleMoveStatus;
-            if (!settled) return;
-            thumbnailManager.SyncClickBordersToThumbs(currentDpiScale);
-            thumbnailManager.SetPreviewAnimating(false);
-            animationManager.StartKeepAlive();
-        }
-
         private void ShowView()
         {
             ShowActivated = false;
@@ -238,7 +213,7 @@ namespace WindowScatter
         {
             var view = ViewFor(selectedWindowHandle);
             var thumb = view?.windowThumbs.FirstOrDefault(t => t.WindowHandle == selectedWindowHandle);
-            if (thumb == null || !scatterInteraction.IsOpen || isTransitioning || movingWindow || AnyAnimating) return;
+            if (views.Count < 2 || thumb == null || !scatterInteraction.IsOpen || isTransitioning || movingWindow || AnyAnimating) return;
             var menu = view!.CreateMoveMenu(thumb, thumb.ClickBorder);
             menu.IsOpen = true;
         }
@@ -283,6 +258,8 @@ namespace WindowScatter
         private async System.Threading.Tasks.Task MoveWindowAsync(WindowActivationTarget target, MainWindow source, MainWindow destination)
         {
             if (movingWindow || isTransitioning || !scatterInteraction.IsOpen || isScatterActive || AnyAnimating) return;
+            if (!views.Contains(source) || !views.Contains(destination))
+            { ReportMoveError(new InvalidOperationException("The move destination is not visible in this overview.")); return; }
             if (ReferenceEquals(source, destination)) return;
             if (moveOperation.IsPending)
             { ReportMoveError(new InvalidOperationException("A previous native move is still pending. Wait for Windows to reply.")); return; }

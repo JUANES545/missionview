@@ -33,6 +33,7 @@ namespace WindowScatter
         private MainWindow? activeView;
         private MonitorHelper.MonitorBounds monitor = null!;
         private List<MonitorHelper.MonitorBounds> monitors = new();
+        private bool showMinimizedWindows = true;
         private WindowTransfer windowTransfer => services.Transfer;
         private WindowMoveOperation moveOperation => services.Move;
         private CancellationTokenSource? moveCancellation;
@@ -190,7 +191,9 @@ namespace WindowScatter
             helper.EnsureHandle();
 
             animationManager = new WindowAnimationManager(windowThumbs);
-            thumbnailManager = new ThumbnailManager(ScatterCanvas, windowThumbs, helper.Handle, OnWindowClicked, OnWindowHovered);
+            thumbnailManager = new ThumbnailManager(ScatterCanvas, windowThumbs, helper.Handle, OnWindowClicked, OnWindowHovered,
+                selectionBorderColor: () => settings.SelectionBorderColor, effectsEnabled: () => !settings.ReduceAnimations);
+            RefreshOverviewPresentation(SystemParameters.HighContrast, SystemParameters.ClientAreaAnimation);
             thumbnailManager.ConfigureInput = ConfigureThumbnailInput;
             hostHandle = helper.Handle;
             chromeHandle = new WindowInteropHelper(chromeWindow).EnsureHandle();
@@ -446,10 +449,8 @@ namespace WindowScatter
 
         private void OnSystemParametersChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
         {
-            if (e.PropertyName == nameof(SystemParameters.ClientAreaAnimation))
-                animationManager?.SetMotionEnabled(SystemParameters.ClientAreaAnimation);
             if (e.PropertyName is nameof(SystemParameters.HighContrast) or nameof(SystemParameters.ClientAreaAnimation))
-                thumbnailManager?.ApplyPalette(SystemParameters.HighContrast, SystemParameters.ClientAreaAnimation);
+                RefreshOverviewPresentation(SystemParameters.HighContrast, SystemParameters.ClientAreaAnimation);
         }
 
         #endregion
@@ -521,17 +522,9 @@ namespace WindowScatter
                 IntPtr previousWindow = previous.Handle;
                 scatterInteraction.BeginSession(previous);
                 generation = scatterInteraction.Generation;
-                monitors = MonitorHelper.GetMonitors().OrderBy(m => m.Left).ThenBy(m => m.Top).ToList();
-                var pointerMonitor = MonitorHelper.GetMonitorFromCursor();
-                monitor = monitors.FirstOrDefault(m => m.Handle == pointerMonitor.Handle) ?? monitors[0];
-                foreach (var other in monitors.Where(m => m.Handle != monitor.Handle))
-                {
-                    var view = new MainWindow(this) { monitor = other };
-                    views.Add(view);
-                    view.InitializeRendering();
-                }
-                if (!Win32Interop.GetCursorPos(out var pt))
-                    throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error(), "Could not read the pointer position.");
+                var pt = ReadPointer();
+                var pointerMonitor = MonitorHelper.GetMonitorFromPoint(pt.X, pt.Y);
+                InitializeOverviewViews(MonitorHelper.GetMonitors(), pointerMonitor.Handle);
                 lastHoverPosition = pt;
                 previewKey.Release();
                 try

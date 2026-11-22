@@ -14,11 +14,19 @@ internal sealed class SettingsWindow : Window
     private readonly AppSettings source;
     private readonly Func<AppSettings, bool> apply;
     private readonly Func<bool> isAppExposeAvailable;
+    private readonly Func<bool> confirmReset;
     private readonly Button shortcut = new();
     private readonly Button appExposeShortcut = new();
     private Button? activeRecorder;
     private readonly CheckBox hotCorners = new() { Content = "Enable hot corners" };
     private readonly ComboBox position = new();
+    private readonly ComboBox selectionBorder = new();
+    private readonly ComboBox overviewMonitors = new();
+    private readonly ComboBox thumbnailSize = new();
+    private readonly Slider dimming = new() { Minimum = 0, Maximum = 100, TickFrequency = 5,
+        SmallChange = 1, LargeChange = 10, IsMoveToPointEnabled = true };
+    private readonly CheckBox minimized = new() { Content = "Show minimized windows in App Exposé" };
+    private readonly CheckBox reduceAnimations = new() { Content = "Reduce animations" };
     private readonly TextBox delay = new();
     private readonly CheckBox startup = new() { Content = "Start with Windows" };
     private readonly TextBlock feedback = new() { TextWrapping = TextWrapping.Wrap };
@@ -32,14 +40,19 @@ internal sealed class SettingsWindow : Window
     private string hotkey;
     private string? appExposeHotkey;
     private bool shortcutWarning;
+    private bool resetDraft;
     internal bool IsRecordingShortcut { get; private set; }
     internal int RecordingGeneration { get; private set; }
 
-    internal SettingsWindow(AppSettings source, Func<AppSettings, bool> apply, UIElement updates, Func<bool> isAppExposeAvailable)
+    internal SettingsWindow(AppSettings source, Func<AppSettings, bool> apply, UIElement updates, Func<bool> isAppExposeAvailable,
+        Func<bool>? confirmReset = null)
     {
         this.source = source;
         this.apply = apply;
         this.isAppExposeAvailable = isAppExposeAvailable;
+        this.confirmReset = confirmReset ?? (() => MessageBox.Show(this,
+            "Reset all settings to their defaults?\n\nChanges apply only when you save.", "Reset settings",
+            MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.No) == MessageBoxResult.Yes);
         hotkey = source.Hotkey;
         appExposeHotkey = source.AppExposeHotkey;
         Title = "MissionView Settings";
@@ -53,7 +66,7 @@ internal sealed class SettingsWindow : Window
         Foreground = SystemParameters.HighContrast ? SystemColors.WindowTextBrush : SharedBrushes.Text;
         FontFamily = new FontFamily("Segoe UI Variable, Segoe UI");
         FontSize = 14;
-        hotCorners.Foreground = startup.Foreground = Foreground;
+        hotCorners.Foreground = startup.Foreground = minimized.Foreground = reduceAnimations.Foreground = Foreground;
         UseLayoutRounding = true;
         ApplyControlStyles();
         var root = new DockPanel { Margin = new Thickness(20), LastChildFill = true };
@@ -133,6 +146,38 @@ internal sealed class SettingsWindow : Window
         var about = AddCategory("Updates & About");
         startup.IsChecked = source.RunOnStartup;
         AddPreference(general, "Startup", startup, "Open MissionView when you sign in to Windows.");
+        foreach (var color in new[] { "White", "Blue", "Mint" })
+            selectionBorder.Items.Add(new ComboBoxItem { Content = color, Tag = color });
+        RestoreSelectionBorder(source);
+        AddPreference(general, "Selection border", selectionBorder,
+            "Choose the outline color for selected window previews in Overview and App Exposé. High contrast uses the Windows highlight color.");
+        overviewMonitors.Items.Add(new ComboBoxItem { Content = "All displays", Tag = "All" });
+        overviewMonitors.Items.Add(new ComboBoxItem { Content = "Current display", Tag = "Current" });
+        SelectItem(overviewMonitors, source.OverviewMonitorScope);
+        AddPreference(general, "Overview displays", overviewMonitors,
+            "Show only the display under the pointer when the overview opens. Moving windows between displays is unavailable in this mode.");
+        foreach (var size in new[] { "Compact", "Standard", "Large" })
+            thumbnailSize.Items.Add(new ComboBoxItem { Content = size, Tag = size });
+        SelectItem(thumbnailSize, source.ThumbnailSize);
+        AddPreference(general, "Thumbnail size", thumbnailSize,
+            "Choose the size of window previews. Previews shrink when needed to fit the display.");
+        dimming.Value = source.BackgroundDimming;
+        dimming.SetResourceReference(Control.ForegroundProperty, "FieldFocus");
+        AddPreference(general, "Background dimming", dimming,
+            "Dim the desktop behind window previews, from 0 to 100 percent. High contrast uses an opaque Windows background.");
+        minimized.IsChecked = source.ShowMinimizedWindows;
+        AddPreference(general, "Minimized windows", minimized,
+            "Include minimized windows in the App Exposé shelf. The general overview shows open windows only.");
+        reduceAnimations.IsChecked = source.ReduceAnimations;
+        AddPreference(general, "Animations", reduceAnimations,
+            "Open, close and enlarge previews without animated movement. Windows reduced-motion settings also apply.");
+        var reset = new Button { Content = "Reset settings" };
+        reset.Click += (_, _) =>
+        {
+            if (this.confirmReset()) RestorePreferences(new AppSettings());
+        };
+        AddPreference(general, "Reset settings", reset,
+            "Restore defaults in this settings window. Save applies them; Cancel keeps your current settings.");
         AddPreference(shortcuts, "Overview shortcut", shortcut, "Record a shortcut with Ctrl, Alt or Win. Press Escape to cancel recording. Changes apply when you save.");
         AddPreference(shortcuts, "App Exposé shortcut", appExposeShortcut, "Open windows from the application under the pointer. Record a separate shortcut with Ctrl, Alt or Win. Until changed, this follows the overview shortcut with Shift.");
         foreach (var recorder in new[] { shortcut, appExposeShortcut })
@@ -198,8 +243,20 @@ internal sealed class SettingsWindow : Window
             if (!ReferenceEquals(e.Source, categories)) return;
             if (IsRecordingShortcut) StopRecording();
             foreach (var help in contextualHelp) ((ToolTip)help.Button.ToolTip).IsOpen = false;
+            ConstrainGeneralViewport();
         };
         categories.SizeChanged += (_, _) => ReflowPreferences();
+        void ConstrainGeneralViewport()
+        {
+            if (bodyScroll.ActualHeight <= 0 || categories.SelectedItem is not TabItem selected) return;
+            var selectedScroll = (ScrollViewer)selected.Content;
+            double headerHeight = categories.ActualHeight - selectedScroll.ActualHeight;
+            var generalScroll = (ScrollViewer)((TabItem)categories.Items[0]).Content;
+            // Keep the longer list inside its category, retaining the outer fallback on very short windows.
+            generalScroll.MaxHeight = Math.Max(160, bodyScroll.ActualHeight - brand.ActualHeight - brand.Margin.Bottom - headerHeight);
+        }
+        bodyScroll.SizeChanged += (_, _) => ConstrainGeneralViewport();
+        categories.SizeChanged += (_, _) => ConstrainGeneralViewport();
         SystemParameters.StaticPropertyChanged += RefreshSystemPalette;
         Closed += (_, _) =>
         {
@@ -236,7 +293,7 @@ internal sealed class SettingsWindow : Window
         {
             Background = SystemParameters.HighContrast ? SystemColors.WindowBrush : SharedBrushes.Graphite;
             Foreground = SystemParameters.HighContrast ? SystemColors.WindowTextBrush : SharedBrushes.Text;
-            hotCorners.Foreground = startup.Foreground = Foreground;
+            hotCorners.Foreground = startup.Foreground = minimized.Foreground = reduceAnimations.Foreground = Foreground;
             categories.Background = Background;
             categories.Foreground = Foreground;
             foreach (var row in preferenceRows)
@@ -269,6 +326,12 @@ internal sealed class SettingsWindow : Window
         string description = text switch
         {
             "Startup" => "Open at sign-in",
+            "Selection border" => "Selected window outline",
+            "Overview displays" => "Where the overview opens",
+            "Thumbnail size" => "Preview dimensions",
+            "Minimized windows" => "App Exposé shelf",
+            "Animations" => "Optional movement",
+            "Reset settings" => "Restore defaults before saving",
             "Overview shortcut" => "All windows",
             "App Exposé shortcut" => "Windows from one app",
             "Activation" => "Open from a screen corner",
@@ -277,6 +340,8 @@ internal sealed class SettingsWindow : Window
         };
         var summary = new TextBlock { Text = description, FontSize = 12, TextWrapping = TextWrapping.Wrap,
             Margin = new Thickness(0, 4, 0, 0) };
+        if (control == dimming)
+            summary.SetBinding(TextBlock.TextProperty, new Binding(nameof(Slider.Value)) { Source = dimming, StringFormat = "{0:0}% dimming" });
         summary.SetResourceReference(TextBlock.ForegroundProperty, "SecondaryText");
         captionText.Children.Add(summary);
         var label = new Label { Content = captionText,
@@ -344,7 +409,9 @@ internal sealed class SettingsWindow : Window
         }
         var glyph = new DecorativeGlyph { Text = text switch
             {
-                "Startup" => "\uE7E8", "Overview shortcut" => "\uE8A7", "App Exposé shortcut" => "\uE737",
+                "Startup" => "\uE7E8", "Selection border" => "\uE790", "Overview shortcut" => "\uE8A7", "App Exposé shortcut" => "\uE737",
+                "Overview displays" => "\uE7F4", "Thumbnail size" => "\uE8A7", "Background dimming" => "\uE706",
+                "Minimized windows" => "\uE921", "Animations" => "\uE768", "Reset settings" => "\uE777",
                 "Activation" => "\uE7C9", "Corner" => "\uE745", _ => "\uE916"
             },
             FontFamily = new FontFamily("Segoe Fluent Icons, Segoe MDL2 Assets"), FontSize = 16,
@@ -643,8 +710,13 @@ internal sealed class SettingsWindow : Window
         bool unchanged = hotkey == source.Hotkey && appExposeHotkey == source.AppExposeHotkey && hotCorners.IsChecked == source.EnableHotCorners
             && ((string)((ComboBoxItem)position.SelectedItem).Tag).Equals(source.HotCornerPosition, StringComparison.OrdinalIgnoreCase)
             && int.TryParse(delay.Text, out int milliseconds) && milliseconds == source.HotCornerDelay
+            && selectionBorder.SelectedItem is ComboBoxItem border && ((string)border.Tag).Equals(source.SelectionBorderColor, StringComparison.OrdinalIgnoreCase)
+            && (string?)((ComboBoxItem?)overviewMonitors.SelectedItem)?.Tag == source.OverviewMonitorScope
+            && (string?)((ComboBoxItem?)thumbnailSize.SelectedItem)?.Tag == source.ThumbnailSize
+            && dimming.Value == source.BackgroundDimming && minimized.IsChecked == source.ShowMinimizedWindows
+            && reduceAnimations.IsChecked == source.ReduceAnimations
             && startup.IsChecked == source.RunOnStartup;
-        if (unchanged && !IsRecordingShortcut) return true;
+        if (unchanged && !IsRecordingShortcut && !resetDraft) return true;
         var choice = MessageBox.Show(this, "Save your settings before installing the update?\n\nChoose No to discard these changes.",
             "Unsaved settings", MessageBoxButton.YesNoCancel, MessageBoxImage.Question, MessageBoxResult.Cancel);
         if (choice == MessageBoxResult.Yes) return Save(closeOnSuccess: false);
@@ -673,7 +745,7 @@ internal sealed class SettingsWindow : Window
             delay.Focus();
             return false;
         }
-        var candidate = source.Copy();
+        var candidate = resetDraft ? new AppSettings() : source.Copy();
         candidate.Hotkey = hotkey;
         candidate.AppExposeHotkey = appExposeHotkey;
         if (!OverviewShortcutPair.TryParse(candidate.Hotkey, candidate.AppExposeHotkey, out _, out string shortcutError))
@@ -688,6 +760,28 @@ internal sealed class SettingsWindow : Window
         candidate.HotCornerPosition = (string)((ComboBoxItem)position.SelectedItem).Tag;
         candidate.HotCornerDelay = milliseconds;
         candidate.RunOnStartup = startup.IsChecked == true;
+        if (selectionBorder.SelectedItem is not ComboBoxItem selectedBorder)
+        {
+            categories.SelectedIndex = 0;
+            feedback.Tag = "Error";
+            feedback.Text = "Choose White, Blue or Mint for the selection border.";
+            selectionBorder.Focus();
+            return false;
+        }
+        candidate.SelectionBorderColor = (string)selectedBorder.Tag;
+        if (overviewMonitors.SelectedItem is not ComboBoxItem selectedMonitor || thumbnailSize.SelectedItem is not ComboBoxItem selectedSize)
+        {
+            categories.SelectedIndex = 0;
+            feedback.Tag = "Error";
+            feedback.Text = "Choose an overview display scope and thumbnail size.";
+            (overviewMonitors.SelectedItem == null ? overviewMonitors : thumbnailSize).Focus();
+            return false;
+        }
+        candidate.OverviewMonitorScope = (string)selectedMonitor.Tag;
+        candidate.ThumbnailSize = (string)selectedSize.Tag;
+        candidate.BackgroundDimming = dimming.Value;
+        candidate.ShowMinimizedWindows = minimized.IsChecked == true;
+        candidate.ReduceAnimations = reduceAnimations.IsChecked == true;
         shortcutWarning = false;
         feedback.Text = "";
         if (apply(candidate))
@@ -705,16 +799,37 @@ internal sealed class SettingsWindow : Window
         }
     }
 
-    private void RestorePreferences()
+    private void RestorePreferences(AppSettings? defaults = null)
     {
-        hotkey = source.Hotkey;
-        appExposeHotkey = source.AppExposeHotkey;
+        var preferences = defaults ?? source;
+        resetDraft = defaults != null;
+        hotkey = preferences.Hotkey;
+        appExposeHotkey = preferences.AppExposeHotkey;
         StopRecording();
-        hotCorners.IsChecked = source.EnableHotCorners;
+        hotCorners.IsChecked = preferences.EnableHotCorners;
         foreach (ComboBoxItem corner in position.Items)
-            if (((string)corner.Tag).Equals(source.HotCornerPosition, StringComparison.OrdinalIgnoreCase))
+            if (((string)corner.Tag).Equals(preferences.HotCornerPosition, StringComparison.OrdinalIgnoreCase))
                 position.SelectedItem = corner;
-        delay.Text = source.HotCornerDelay.ToString(CultureInfo.CurrentCulture);
-        RefreshStartupPreference();
+        delay.Text = preferences.HotCornerDelay.ToString(CultureInfo.CurrentCulture);
+        RestoreSelectionBorder(preferences);
+        SelectItem(overviewMonitors, preferences.OverviewMonitorScope);
+        SelectItem(thumbnailSize, preferences.ThumbnailSize);
+        dimming.Value = preferences.BackgroundDimming;
+        minimized.IsChecked = preferences.ShowMinimizedWindows;
+        reduceAnimations.IsChecked = preferences.ReduceAnimations;
+        startup.IsChecked = preferences.RunOnStartup;
+    }
+
+    private void RestoreSelectionBorder(AppSettings preferences)
+    {
+        foreach (ComboBoxItem color in selectionBorder.Items)
+            if (((string)color.Tag).Equals(preferences.SelectionBorderColor, StringComparison.OrdinalIgnoreCase))
+                selectionBorder.SelectedItem = color;
+    }
+
+    private static void SelectItem(ComboBox control, string value)
+    {
+        foreach (ComboBoxItem item in control.Items)
+            if (Equals(item.Tag, value)) control.SelectedItem = item;
     }
 }

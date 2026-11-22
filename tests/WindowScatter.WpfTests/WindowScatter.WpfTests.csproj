@@ -40,6 +40,9 @@
     <Compile Include="../../Infrastructure/Windows/ApplicationIdentityReader.cs" Link="ApplicationIdentityReader.cs" />
     <Compile Include="../../Infrastructure/Windows/WindowSurfacePolicy.cs" Link="WindowSurfacePolicy.cs" />
     <Compile Include="../../Presentation/Wpf/Overview/MainWindow.Navigation.cs" Link="MainWindow.Navigation.cs" />
+    <Compile Include="../../Presentation/Wpf/Overview/MainWindow.Minimized.cs" Link="MainWindow.Minimized.cs" />
+    <Compile Include="../../Presentation/Wpf/Overview/MainWindow.DisplayOptions.cs" Link="MainWindow.DisplayOptions.cs" />
+    <Compile Include="../../Presentation/Wpf/Rendering/WindowSwitcher.cs" Link="WindowSwitcher.cs" />
     <Compile Include="../../Presentation/Wpf/Overview/MainWindow.Drag.cs" Link="MainWindow.Drag.cs" />
     <Compile Include="../../Infrastructure/Windows/DwmDragPreview.cs" Link="DwmDragPreview.cs" />
     <Compile Include="../../Infrastructure/Windows/MonitorHelper.cs" Link="MonitorHelper.cs" />

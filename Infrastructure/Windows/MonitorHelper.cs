@@ -149,6 +149,17 @@ namespace WindowScatter
             return handles.Select(GetMonitorBounds).ToList();
         }
 
+        internal static IReadOnlyList<MonitorBounds> OverviewMonitors(
+            IReadOnlyList<MonitorBounds> topology, string scope, IntPtr pointerMonitor)
+        {
+            if (scope == "All") return topology.ToArray();
+            if (scope != "Current")
+                throw new ArgumentException("Unsupported overview monitor scope.", nameof(scope));
+            var current = topology.SingleOrDefault(m => m.Handle == pointerMonitor)
+                ?? throw new InvalidOperationException("The pointer display is no longer available. Open the overview again.");
+            return [current];
+        }
+
         public static MonitorBounds? FindWindowMonitor(RECT rect, IReadOnlyList<MonitorBounds> monitors)
         {
             MonitorBounds? best = null;

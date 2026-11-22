@@ -18,18 +18,23 @@ namespace WindowScatter
         private readonly Action<IntPtr> onWindowClicked;
         private readonly Action<IntPtr> onWindowHovered;
         private readonly Func<IntPtr, (int Result, IntPtr Handle)> register;
+        private readonly Func<string> selectionBorderColor;
+        private readonly Func<bool> effectsEnabled;
         public Action<WindowThumb>? ConfigureInput { get; set; }
         public IReadOnlyList<IntPtr> SourceOrder { get; set; } = Array.Empty<IntPtr>();
 
         public ThumbnailManager(Canvas scatterCanvas, List<WindowThumb> windowThumbs,
             IntPtr ownerWindowHandle, Action<IntPtr> onWindowClicked, Action<IntPtr> onWindowHovered,
-            Func<IntPtr, (int Result, IntPtr Handle)>? register = null)
+            Func<IntPtr, (int Result, IntPtr Handle)>? register = null, Func<string>? selectionBorderColor = null,
+            Func<bool>? effectsEnabled = null)
         {
             this.scatterCanvas = scatterCanvas;
             this.windowThumbs = windowThumbs;
             this.ownerWindowHandle = ownerWindowHandle;
             this.onWindowClicked = onWindowClicked;
             this.onWindowHovered = onWindowHovered;
+            this.selectionBorderColor = selectionBorderColor ?? (() => "White");
+            this.effectsEnabled = effectsEnabled ?? (() => true);
             this.register = register ?? (source =>
             {
                 int result = DwmRegisterThumbnail(ownerWindowHandle, source, out var thumbnail);
@@ -87,7 +92,7 @@ namespace WindowScatter
                     Width = targetW + 10,
                     Height = targetH + 10,
                     BorderThickness = new System.Windows.Thickness(3),
-                    BorderBrush = SharedBrushes.Mint,
+                    BorderBrush = Brushes.White,
                     CornerRadius = new System.Windows.CornerRadius(8),
                     Opacity = 0,
                     IsHitTestVisible = false,
@@ -109,8 +114,6 @@ namespace WindowScatter
                     Height = 20,
                     ClipToBounds = true,
                     Foreground = Brushes.White,
-                    Background = SharedBrushes.Graphite,
-                    Padding = new Thickness(6, 0, 6, 0),
                     FontSize = 13,
                     FontFamily = new FontFamily("Segoe UI Variable, Segoe UI"),
                     FontWeight = System.Windows.FontWeights.Normal,
@@ -174,11 +177,13 @@ namespace WindowScatter
 
         internal void ApplyPalette(bool highContrast, bool effects)
         {
+            effects &= effectsEnabled();
+            var selectedBrush = highContrast ? SystemColors.HighlightBrush : SharedBrushes.SelectionBorder(selectionBorderColor());
             foreach (var thumb in windowThumbs)
             {
                 if (thumb.HighlightBorder is { } frame)
                 {
-                    frame.BorderBrush = highContrast ? SystemColors.HighlightBrush : SharedBrushes.Mint;
+                    frame.BorderBrush = selectedBrush;
                     if (frame.Child is Border inner)
                         inner.BorderBrush = highContrast ? SystemColors.WindowBrush : SharedBrushes.Graphite;
                     frame.Effect = !highContrast && effects
@@ -187,9 +192,11 @@ namespace WindowScatter
                 }
                 if (thumb.TitleLabel is { } title)
                 {
-                    title.Foreground = highContrast ? SystemColors.WindowTextBrush : SharedBrushes.Text;
-                    title.Background = highContrast ? SystemColors.WindowBrush : SharedBrushes.Graphite;
-                    title.Effect = null;
+                    title.Foreground = highContrast ? SystemColors.WindowTextBrush : Brushes.White;
+                    title.Background = highContrast ? SystemColors.WindowBrush : null;
+                    title.Effect = !highContrast && effects
+                        ? new DropShadowEffect { BlurRadius = 8, ShadowDepth = 1, Opacity = .9, Color = Colors.Black }
+                        : null;
                 }
             }
         }
