@@ -1,5 +1,8 @@
 using System.Runtime.ExceptionServices;
 using System.Windows;
+using System.Windows.Automation;
+using System.Windows.Automation.Peers;
+using System.Windows.Automation.Provider;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Interop;
@@ -10,6 +13,107 @@ using Xunit;
 
 public class MainWindowNavigationTests
 {
+    [Fact]
+    public void SyntheticSearchSkipsHiddenShelfSlotsWithoutRepackingAndRestoresTabOrder()
+        => RunSta(() =>
+        {
+            using var app = new MainWindow();
+            app.AddStrip(12, 1600, 1000);
+            var strip = app.Strip!;
+            var original = strip.NavigationTargets(visibleOnly: false).ToArray();
+            app.TypeSearch("window 1");
+
+            var matches = strip.NavigationTargets(visibleOnly: false);
+            Assert.Equal(original.Take(10).ToArray(), matches.ToArray());
+            Assert.Equal(new IntPtr(10), app.Selected);
+            app.Tab(-1);
+            Assert.Equal(new IntPtr(19), app.Selected);
+            app.TypeSearch("");
+            Assert.Equal(original, strip.NavigationTargets(visibleOnly: false).ToArray());
+            app.Tab(1);
+            Assert.Equal(new IntPtr(20), app.Selected);
+        });
+
+    [Fact]
+    public void RebuildWithActiveSearchRegistersOnlyMatchingTargetsAsVisibleAndReselects()
+        => RunSta(() =>
+        {
+            using var app = new MainWindow();
+            var original = app.RegisterNormalWindows("Draft to close", "Draft to retain", "Other");
+            app.TypeSearch("draft");
+            app.Pick(original[0].WindowHandle);
+            var remaining = original.Skip(1).Select(thumb => new WindowInfo
+            {
+                Handle = thumb.WindowHandle, Identity = thumb.Identity, Title = thumb.Title,
+                OriginalRect = new PhysicalWindowRect { Left = 100, Top = 100, Right = 700, Bottom = 500 }
+            }).ToArray();
+
+            app.Rebuild(false, remaining);
+
+            Assert.Equal("draft", app.Query);
+            Assert.Equal(2, app.Thumbs.Count);
+            Assert.True(app.Thumbs.Single(thumb => thumb.Title == "Other").IsFiltered);
+            Assert.Equal(remaining[0].Handle, app.Selected);
+            Assert.Equal(remaining[0].Handle, Assert.Single(Assert.Single(app.Snapshot()).Normal).Identity.Handle);
+        });
+
+    [Fact]
+    public void TitleSearchKeepsSlotsAndRemovesHiddenTargetsAcrossViews()
+        => RunSta(() =>
+        {
+            using var app = new MainWindow();
+            var other = app.AddView(1600, 0, 1600, 1000, 1);
+            string tail = new('x', 90);
+            var normal = app.RegisterNormalWindows("Notes", tail + " Café");
+            var remote = Assert.Single(other.RegisterNormalWindows("Cafe calendar"));
+            app.AddStrip(2, 1600, 1000);
+            var slots = normal.Select(t => (t.ThumbnailHandle, t.TargetX, t.TargetY,
+                Canvas.GetLeft(t.ClickBorder), Canvas.GetTop(t.ClickBorder))).ToArray();
+            var shelfSlots = app.Strip!.Thumbs.Select(t => (t.TargetX, t.TargetY)).ToArray();
+            var list = UIElementAutomationPeer.CreatePeerForElement(app.ThumbnailCanvas);
+            var hidden = list.GetChildren().First();
+            var hiddenInvoke = Assert.IsAssignableFrom<IInvokeProvider>(hidden.GetPattern(PatternInterface.Invoke));
+            var shelf = UIElementAutomationPeer.CreatePeerForElement(app.Strip);
+            var shelfEntry = shelf.GetChildren().First();
+            var hiddenSelect = Assert.IsAssignableFrom<ISelectionItemProvider>(shelfEntry.GetPattern(PatternInterface.SelectionItem));
+            app.Pick(normal[0].WindowHandle);
+
+            other.TypeSearch("cafe");
+
+            Assert.Empty(app.Errors);
+            Assert.Equal("cafe", app.Query);
+            Assert.Equal(normal[1].WindowHandle, app.Selected);
+            Assert.Equal(Visibility.Hidden, normal[0].ClickBorder.Visibility);
+            Assert.Equal(slots, normal.Select(t => (t.ThumbnailHandle, t.TargetX, t.TargetY,
+                Canvas.GetLeft(t.ClickBorder), Canvas.GetTop(t.ClickBorder))).ToArray());
+            Assert.Equal(shelfSlots, app.Strip.Thumbs.Select(t => (t.TargetX, t.TargetY)).ToArray());
+            Assert.Equal(tail + " Café", Assert.Single(list.GetChildren()).GetName());
+            Assert.Throws<ElementNotEnabledException>(() => hiddenInvoke.Invoke());
+            Assert.Empty(shelf.GetChildren());
+            Assert.Throws<ElementNotEnabledException>(() => hiddenSelect.Select());
+            app.Tab(1);
+            Assert.Equal(remote.WindowHandle, app.Selected);
+
+            app.TypeSearch("no matching window");
+            Assert.Equal(Visibility.Visible, app.SearchStatus);
+            Assert.True(app.Press(Key.Return));
+            Assert.Equal(0, app.ActivationRequests);
+            Assert.True(app.Press(Key.Escape));
+            Assert.True(app.SessionOpen);
+            Assert.Empty(other.Query);
+            Assert.Equal(Visibility.Collapsed, app.SearchStatus);
+            Assert.Equal(2, list.GetChildren().Count);
+            Assert.Equal(2, shelf.GetChildren().Count);
+
+            app.TypeSearch("window 11");
+            Assert.Empty(list.GetChildren());
+            Assert.Equal("Window 11, minimized", Assert.Single(shelf.GetChildren()).GetName());
+            Assert.Equal(new IntPtr(11), app.Selected);
+            app.TypeSearch("cafe calendar");
+            Assert.True(app.Press(Key.Return));
+            Assert.Equal(remote.WindowHandle, app.Clicked);
+        });
+
     [Theory]
     [InlineData("Compact", 1.5)]
     [InlineData("Standard", 2)]
@@ -601,6 +705,8 @@ namespace WindowScatter
         private List<MonitorHelper.MonitorBounds> monitors = [];
         private AppSettings settings = new();
         private readonly TextBlock MoveStatus = new();
+        private readonly TextBox SearchBox = new();
+        private readonly TextBlock NoSearchResults = new() { Visibility = Visibility.Collapsed };
         private readonly Window chromeWindow = new() { ShowActivated = false };
         private AppExposeRequest? appExposeRequest;
         private string IdleMoveStatus => "";
@@ -630,6 +736,9 @@ namespace WindowScatter
         internal double ContentHeight => OverviewContentHeight;
         internal TextBlock EmptyState => EmptyMessage;
         internal int DisplayedWindowCount => enumeratedWindowCount;
+        internal string Query => SearchBox.Text;
+        internal bool SessionOpen => scatterInteraction.IsOpen;
+        internal Visibility SearchStatus => NoSearchResults.Visibility;
         internal IntPtr CurrentDisplay => monitor.Handle;
         internal IReadOnlyList<MonitorHelper.MonitorBounds> Topology => monitors;
         internal bool SessionShowsMinimized => showMinimizedWindows;
@@ -645,6 +754,7 @@ namespace WindowScatter
             monitor = new() { Handle = new(parent == null ? 1 : views.Count + 1),
                 Left = left, Top = top, Width = width, Height = height, DpiScale = dpi };
             scatterInteraction = session.Interaction;
+            SearchBox.TextChanged += SearchBox_TextChanged;
             previewKey = session.PreviewKey;
             if (parent == null) scatterInteraction.BeginSession(default);
             activeView = this;
@@ -658,6 +768,8 @@ namespace WindowScatter
         }
 
         private void InitializeRendering() { }
+        private void ConfigureCloseInput(WindowThumb thumb) { }
+        private void RestorePendingCloseStatus() { }
         internal void RefreshPresentation(bool highContrast, bool systemAnimation) => RefreshOverviewPresentation(highContrast, systemAnimation);
         internal Brush Backdrop => DimOverlay.Background;
         internal void UseAppExpose(WindowActivationTarget target) =>
@@ -695,6 +807,7 @@ namespace WindowScatter
         internal void Reveal(int id) => SelectWindow(new(id), keyboard: true, revealMinimized: true);
         internal void Pick(IntPtr handle) => SelectWindow(handle);
         internal void Tab(int direction) => SelectNextWindow(direction);
+        internal void TypeSearch(string query) => SearchBox.Text = query;
         internal void Arrow(int dx, int dy) => SelectWindowInDirection(dx, dy);
         internal IReadOnlyList<OverviewDisplaySnapshot> Snapshot() => NavigationSnapshot();
         internal void Rebuild(bool showMinimized, params WindowInfo[] windows)
@@ -704,6 +817,7 @@ namespace WindowScatter
             canvas.Measure(new Size(monitor.Width / currentDpiScale, monitor.Height / currentDpiScale));
             canvas.Arrange(new Rect(0, 0, monitor.Width / currentDpiScale, monitor.Height / currentDpiScale));
             canvas.UpdateLayout();
+            if (coordinator.IsSearching) coordinator.RefreshSearchResults();
         }
         internal void HoverWithoutPointerMovement(IntPtr handle)
         {

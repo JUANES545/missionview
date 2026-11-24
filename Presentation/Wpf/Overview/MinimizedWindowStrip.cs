@@ -107,12 +107,17 @@ namespace WindowScatter
                 AutomationProperties.SetHelpText(button, "Press Enter to restore. Preview and moving are unavailable while minimized.");
                 var thumb = new WindowThumb
                 {
+                    Title = window.Title,
                     WindowHandle = window.Handle, Identity = window.Identity, WasMinimized = true,
                     WasMaximized = window.WasMaximized, ClickBorder = tile, HighlightBorder = tile, TitleLabel = title,
                     TargetWidth = tile.Width * scale, TargetHeight = tile.Height * scale
                 };
                 tile.MouseEnter += (_, _) => hovered(window.Handle);
-                button.Click += (_, e) => { clicked(window.Handle); e.Handled = true; };
+                button.Click += (_, e) =>
+                {
+                    if (tile.Visibility == Visibility.Visible) clicked(window.Handle);
+                    e.Handled = true;
+                };
                 buttons.Add(button);
                 thumbs.Add(thumb);
                 wrap.Children.Add(tile);
@@ -150,6 +155,7 @@ namespace WindowScatter
             foreach (var thumb in Thumbs)
             {
                 var tile = thumb.ClickBorder;
+                if (tile.Visibility != Visibility.Visible) continue;
                 var bounds = new Rect(tile.TranslatePoint(new Point(), wrap), tile.RenderSize);
                 if (visibleOnly)
                 {
@@ -167,12 +173,30 @@ namespace WindowScatter
             return targets;
         }
 
+        internal void ApplyTitleFilter(string foldedQuery)
+        {
+            bool changed = false;
+            for (int i = 0; i < Thumbs.Count; i++)
+            {
+                var thumb = Thumbs[i];
+                bool matches = thumb.MatchesTitle(foldedQuery);
+                var visibility = matches ? Visibility.Visible : Visibility.Hidden;
+                if (thumb.ClickBorder.Visibility == visibility) continue;
+                thumb.ClickBorder.Visibility = visibility;
+                buttons[i].IsEnabled = matches;
+                buttons[i].RefreshKeyboardToolTip();
+                changed = true;
+            }
+            if (changed) UIElementAutomationPeer.FromElement(this)?.ResetChildrenCache();
+        }
+
         public void SetSelected(IntPtr handle, bool reveal = false, bool keyboardFocus = false)
         {
             for (int i = 0; i < Thumbs.Count; i++)
             {
                 var thumb = Thumbs[i];
                 bool selected = thumb.WindowHandle == handle;
+                if (thumb.CloseButton != null) thumb.CloseButton.Selected = selected;
                 buttons[i].IsSelected = selected;
                 buttons[i].KeyboardSelected = selected && keyboardFocus;
                 if (selected && reveal)
@@ -207,6 +231,7 @@ namespace WindowScatter
             Resources["SelectedText"] = highContrast ? SystemColors.HighlightTextBrush : SharedBrushes.Text;
             Resources["Outline"] = highContrast ? SystemColors.HighlightTextBrush : Brushes.White;
             Resources["Focus"] = highContrast ? SystemColors.WindowTextBrush : Brushes.White;
+            foreach (var thumb in Thumbs) thumb.CloseButton?.ApplyPalette(highContrast);
         }
 
         private static Brush Brush(string value) => (Brush)new BrushConverter().ConvertFromInvariantString(value)!;
@@ -218,7 +243,7 @@ namespace WindowScatter
         {
             public bool CanSelectMultiple => false;
             public bool IsSelectionRequired => false;
-            public IRawElementProviderSimple[] GetSelection() => owner.buttons.Where(b => b.IsSelected)
+            public IRawElementProviderSimple[] GetSelection() => owner.buttons.Where(b => !b.IsFiltered && b.IsSelected)
                 .Select(b => ProviderFromPeer(CreatePeerForElement(b))).ToArray();
             public override object? GetPattern(PatternInterface patternInterface) =>
                 patternInterface == PatternInterface.Selection ? this :
@@ -226,8 +251,12 @@ namespace WindowScatter
                 base.GetPattern(patternInterface);
             protected override AutomationControlType GetAutomationControlTypeCore() => AutomationControlType.List;
             protected override string GetNameCore() => $"Minimized ({owner.Thumbs.Count})";
-            protected override List<AutomationPeer> GetChildrenCore() => owner.buttons
-                .Select(b => CreatePeerForElement(b)).ToList();
+            protected override List<AutomationPeer> GetChildrenCore() => owner.Thumbs
+                .Select((thumb, index) => (thumb, button: owner.buttons[index]))
+                .Where(item => !item.thumb.IsFiltered)
+                .SelectMany(item => item.thumb.CloseButton is { } close
+                    ? new[] { CreatePeerForElement(item.button), CreatePeerForElement(close) }
+                    : new[] { CreatePeerForElement(item.button) }).ToList();
         }
 
         private const string ItemTemplate = """
@@ -311,6 +340,8 @@ namespace WindowScatter
             new FrameworkPropertyMetadata(false, (sender, _) => ((MinimizedWindowButton)sender).RefreshKeyboardToolTip()));
         public bool IsSelected { get => (bool)GetValue(IsSelectedProperty); internal set => SetValue(IsSelectedProperty, value); }
         public bool KeyboardSelected { get => (bool)GetValue(KeyboardSelectedProperty); internal set => SetValue(KeyboardSelectedProperty, value); }
+        internal bool IsFiltered => Parent is Border { Visibility: Visibility.Hidden } or
+            Grid { Parent: Border { Visibility: Visibility.Hidden } };
 
         internal MinimizedWindowButton(MinimizedWindowStrip shelf, IntPtr handle)
         {
@@ -322,7 +353,7 @@ namespace WindowScatter
             Unloaded += (_, _) => { if (ToolTip is ToolTip tooltip) tooltip.IsOpen = false; };
         }
 
-        private void RefreshKeyboardToolTip()
+        internal void RefreshKeyboardToolTip()
         {
             if (ToolTip is ToolTip tooltip)
                 tooltip.IsOpen = (KeyboardSelected || IsKeyboardFocused) && IsVisible && PresentationSource.FromVisual(this) != null;
@@ -353,11 +384,23 @@ namespace WindowScatter
         {
             public bool IsSelected => owner.IsSelected;
             public IRawElementProviderSimple SelectionContainer => ProviderFromPeer(CreatePeerForElement(owner.shelf));
-            public void Select() => owner.Dispatcher.Invoke(() => owner.shelf.SelectFromAutomation(owner.handle));
+            public void Select() => owner.Dispatcher.Invoke(() =>
+            {
+                EnsureNotFiltered();
+                owner.shelf.SelectFromAutomation(owner.handle);
+            });
             public void AddToSelection() => Select();
             public void RemoveFromSelection()
             {
-                if (IsSelected) owner.Dispatcher.Invoke(() => owner.shelf.SelectFromAutomation(IntPtr.Zero));
+                owner.Dispatcher.Invoke(() =>
+                {
+                    EnsureNotFiltered();
+                    if (IsSelected) owner.shelf.SelectFromAutomation(IntPtr.Zero);
+                });
+            }
+            private void EnsureNotFiltered()
+            {
+                if (owner.IsFiltered) throw new ElementNotEnabledException();
             }
             public override object? GetPattern(PatternInterface patternInterface) =>
                 patternInterface == PatternInterface.SelectionItem ? this : base.GetPattern(patternInterface);

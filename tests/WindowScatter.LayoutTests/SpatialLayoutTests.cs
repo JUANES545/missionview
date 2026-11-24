@@ -148,6 +148,169 @@ public class SpatialLayoutTests(ITestOutputHelper output)
     }
 
     [Fact]
+    public void ClosingOpeningAndAddingWindowsRetainsUnchangedVerifiedPositions()
+    {
+        var calculator = new WindowLayoutCalculator();
+        var windows = new List<WindowInfo>
+        {
+            IdentifiedWin(1, 100, 200), IdentifiedWin(2, 110, 210), IdentifiedWin(3, 3500, 300)
+        };
+        var first = calculator.CalculateLayouts(windows, 5120, 1440);
+        var survivor = first.Single(l => l.Window.Handle == new IntPtr(2));
+        var closed = calculator.CalculateLayouts([windows[2], windows[1]], 5120, 1440);
+        Assert.Equal((survivor.X, survivor.Y, survivor.Width, survivor.Height),
+            Geometry(closed.Single(l => l.Window.Handle == new IntPtr(2))));
+        var opened = calculator.CalculateLayouts([IdentifiedWin(4, 110, 210), windows[1], windows[2]], 5120, 1440);
+        Assert.Equal(closed.OrderBy(l => l.Window.Handle.ToInt64()).Select(Geometry),
+            opened.Where(l => l.Window.Handle != new IntPtr(4)).OrderBy(l => l.Window.Handle.ToInt64()).Select(Geometry));
+        AssertSafe(opened, 5120, 1440, 1);
+        Assert.All(opened, l => Assert.Equal(opened[0].Width / opened[0].OrigWidth, l.Height / l.OrigHeight, 7));
+        Assert.Equal(opened.Select(Geometry), calculator.CalculateLayouts(
+            [windows[2], windows[1], IdentifiedWin(4, 110, 210)], 5120, 1440).Select(Geometry));
+    }
+
+    [Theory]
+    [InlineData("move")]
+    [InlineData("resize")]
+    [InlineData("process")]
+    [InlineData("thread")]
+    [InlineData("dpi")]
+    [InlineData("dimensions")]
+    [InlineData("size")]
+    public void ChangedSourceIdentityOrLayoutContextDoesNotReuseOldPreviewPositions(string change)
+    {
+        var calculator = new WindowLayoutCalculator();
+        calculator.CalculateLayouts([IdentifiedWin(1, 100, 200), IdentifiedWin(2, 110, 210)], 5120, 1440);
+        var window = IdentifiedWin(2, change == "move" ? 2100 : 110, 210,
+            change == "resize" ? 900 : 600);
+        if (change == "process") window.Identity = window.Identity with { ProcessId = 42 };
+        if (change == "thread") window.Identity = window.Identity with { ThreadId = 42 };
+        double width = change == "dimensions" ? 2560 : 5120;
+        double dpi = change == "dpi" ? 2 : 1;
+        string size = change == "size" ? "Compact" : "Standard";
+        var expected = new WindowLayoutCalculator().CalculateLayouts([window], width, 1440, dpi, size);
+        Assert.Equal(expected.Select(Geometry), calculator.CalculateLayouts([window], width, 1440, dpi, size).Select(Geometry));
+    }
+
+    [Fact]
+    public void IdenticalColdAndReopenedSnapshotsIgnoreEnumerationOrder()
+    {
+        var windows = new List<WindowInfo>
+        {
+            IdentifiedWin(1, 100, 200), IdentifiedWin(2, 110, 210),
+            IdentifiedWin(3, 500, 800, 1000, 400), IdentifiedWin(4, 3500, 300)
+        };
+        var calculator = new WindowLayoutCalculator();
+        var first = calculator.CalculateLayouts(windows, 5120, 1440);
+        var expected = first.Select(l => (l.Window.Identity, Geometry(l))).ToArray();
+        foreach (var order in new[] { windows.AsEnumerable().Reverse().ToList(),
+            new List<WindowInfo> { windows[2], windows[0], windows[3], windows[1] } })
+        {
+            Assert.Equal(expected, new WindowLayoutCalculator().CalculateLayouts(order, 5120, 1440)
+                .Select(l => (l.Window.Identity, Geometry(l))));
+            Assert.Equal(expected, calculator.CalculateLayouts(order, 5120, 1440)
+                .Select(l => (l.Window.Identity, Geometry(l))));
+        }
+        AssertSafe(first, 5120, 1440, 1);
+    }
+
+    [Fact]
+    public void MovedWindowReanchorsWhileOtherVerifiedPositionsRemainAndUnsupportedIdentityIsForgotten()
+    {
+        var calculator = new WindowLayoutCalculator();
+        var windows = new List<WindowInfo>
+        { IdentifiedWin(1, 100, 200), IdentifiedWin(2, 110, 210), IdentifiedWin(3, 3500, 300) };
+        var first = calculator.CalculateLayouts(windows, 5120, 1440);
+        var moved = IdentifiedWin(1, 2000, 800);
+        var next = calculator.CalculateLayouts([moved, windows[1], windows[2]], 5120, 1440);
+        Assert.Equal(first.Where(l => l.Window.Handle != moved.Handle).Select(Geometry),
+            next.Where(l => l.Window.Handle != moved.Handle).Select(Geometry));
+        var reanchored = next.Single(l => l.Window.Handle == moved.Handle);
+        Assert.Equal((2300d, 1000d), (reanchored.X + reanchored.Width / 2, reanchored.Y + reanchored.Height / 2));
+        calculator.KeepRegisteredIdentities([moved.Identity, windows[2].Identity]);
+        var rediscovered = calculator.CalculateLayouts([windows[1]], 5120, 1440);
+        Assert.Equal(new WindowLayoutCalculator().CalculateLayouts([windows[1]], 5120, 1440).Select(Geometry),
+            rediscovered.Select(Geometry));
+        AssertSafe(next, 5120, 1440, 1);
+    }
+
+    [Fact]
+    public void RetentionThatCannotFitFallsBackToASafeCommonScale()
+    {
+        var calculator = new WindowLayoutCalculator();
+        calculator.CalculateLayouts([IdentifiedWin(1, 100, 200)], 1000, 800);
+        var windows = Enumerable.Range(1, 10).Select(id => IdentifiedWin(id, 100, 200, 900, 600)).ToList();
+        var layouts = calculator.CalculateLayouts(windows, 1000, 800);
+        AssertSafe(layouts, 1000, 800, 1);
+        Assert.All(layouts, l => Assert.Equal(layouts[0].Width / layouts[0].OrigWidth, l.Height / l.OrigHeight, 7));
+        Assert.True(layouts[0].Width / layouts[0].OrigWidth < .5);
+    }
+
+    private static (double X, double Y, double Width, double Height) Geometry(WindowLayout layout) =>
+        (layout.X, layout.Y, layout.Width, layout.Height);
+
+    private static WindowInfo IdentifiedWin(int id, int x, int y, int w = 600, int h = 400)
+    {
+        var window = Win(id, x, y, w, h);
+        window.Identity = new(window.Handle, (uint)id, 100);
+        return window;
+    }
+
+    [Fact]
+    public void LaterUnfittableComponentDoesNotDiscardAnEarlierCompactGroup()
+    {
+        // The right component needs fragmented slots; its envelope cannot fit beside the blocker.
+        var windows = new List<WindowInfo>
+        {
+            Win(1, 0, -500, 2600, 1000), Win(2, 974, -490, 1706, 1000),
+            Win(3, 1850, 0, 1800, 1440),
+            Win(4, 3300, 0, 1700, 1440), Win(5, 3310, 10, 1700, 1440),
+            Win(6, 3320, 20, 1700, 1440)
+        };
+        var calculator = new WindowLayoutCalculator();
+        var layouts = calculator.CalculateLayouts(windows, 5120, 1440);
+        WriteGeometry(layouts);
+        Assert.All(layouts, l => Assert.Equal(.5, l.Width / l.OrigWidth, 7));
+        AssertCompact(layouts.Where(l => l.Window.Handle.ToInt64() <= 2).ToArray(), 1);
+        var blocker = layouts.Single(l => l.Window.Handle == new IntPtr(3));
+        Assert.Equal((2300d, 360d, 900d, 720d), (blocker.X, blocker.Y, blocker.Width, blocker.Height));
+        var nearRight = layouts.Single(l => l.Window.Handle == new IntPtr(4));
+        Assert.Equal(3725, nearRight.X);
+        AssertSafe(layouts, 5120, 1440, 1);
+        windows.Reverse();
+        Assert.Equal(layouts.Select(l => (l.Window.Handle, l.X, l.Y, l.Width, l.Height)),
+            calculator.CalculateLayouts(windows, 5120, 1440).Select(l => (l.Window.Handle, l.X, l.Y, l.Width, l.Height)));
+    }
+
+    [Fact]
+    public void BlockingCompactPlacementRetriesIndividualFitFromUnmodifiedAnchorsAtTheSameScale()
+    {
+        var windows = new List<WindowInfo>
+        {
+            Win(1, 0, -500, 2600, 1000), Win(2, 800, -490, 800, 1000),
+            Win(3, 1730, 0, 1800, 1440),
+            Win(4, 3300, 0, 1700, 1440), Win(5, 3310, 10, 1700, 1440),
+            Win(6, 3320, 20, 1700, 1440)
+        };
+        var layouts = new WindowLayoutCalculator().CalculateLayouts(windows, 5120, 1440);
+        WriteGeometry(layouts);
+        Assert.All(layouts, l => Assert.Equal(.5, l.Width / l.OrigWidth, 7));
+        var original = layouts.Single(l => l.Window.Handle == new IntPtr(1));
+        Assert.Equal((650d, 79d, 1300d, 500d), Geometry(original));
+        var blocker = layouts.Single(l => l.Window.Handle == new IntPtr(3));
+        Assert.Equal((2180d, 360d, 900d, 720d), Geometry(blocker));
+        var small = layouts.Single(l => l.Window.Handle == new IntPtr(2));
+        Assert.Equal(79, small.Y);
+        Assert.Equal(30, original.X - small.X - small.Width, 7);
+        Assert.Equal(3725, layouts.Single(l => l.Window.Handle == new IntPtr(4)).X);
+        AssertSafe(layouts, 5120, 1440, 1);
+        windows.Reverse();
+        Assert.Equal(layouts.Select(l => (l.Window.Handle, Geometry(l))),
+            new WindowLayoutCalculator().CalculateLayouts(windows, 5120, 1440)
+                .Select(l => (l.Window.Handle, Geometry(l))));
+    }
+
+    [Fact]
     public void CompactGroupFitsWhenCenteredAnchorBlocksIndividualCandidates()
     {
         var windows = Enumerable.Range(1, 4).Select(id => Win(id, 50, 100, 900, 600)).ToList();

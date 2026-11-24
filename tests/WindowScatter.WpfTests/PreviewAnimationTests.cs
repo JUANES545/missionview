@@ -1,10 +1,66 @@
 using System.Runtime.ExceptionServices;
+using System.Windows;
+using System.Windows.Controls;
 using System.Windows.Threading;
 using WindowScatter;
 using Xunit;
 
 public class PreviewAnimationTests
 {
+    [Fact]
+    public void ScatterRemainsBusyUntilDispatcherSynchronizesControls()
+        => RunSta(() =>
+        {
+            var thumb = Thumb();
+            thumb.ClickBorder = new OverviewThumbnail("Document");
+            thumb.HighlightBorder = new Border();
+            thumb.TitleLabel = new TextBlock();
+            OverviewCloseInput.Attach(thumb, "Document", () => true, () => { });
+            List<WindowThumb> thumbs = [thumb];
+            var thumbnails = new ThumbnailManager(new Canvas(), thumbs, IntPtr.Zero, _ => { }, _ => { });
+            using var rendered = new ManualResetEventSlim();
+            Thread? worker = null;
+            var manager = new WindowAnimationManager(thumbs, () =>
+            {
+                if (worker == null)
+                {
+                    worker = Thread.CurrentThread;
+                    rendered.Set();
+                }
+                else Thread.Sleep(1);
+                return 0;
+            });
+            manager.SetMotionEnabled(false);
+            var frame = new DispatcherFrame();
+            bool settled = false;
+            manager.OnScatterComplete = () =>
+            {
+                thumbnails.CompleteTransition(2, thumb.WindowHandle);
+                settled = true;
+                frame.Continue = false;
+            };
+            try
+            {
+                thumbnails.BeginTransition(manager.StartScatterAnimation);
+                Assert.True(rendered.Wait(TimeSpan.FromSeconds(5)));
+                Assert.True(worker!.Join(TimeSpan.FromSeconds(5)));
+                Assert.False(settled);
+                Assert.True(manager.IsAnimating);
+                Assert.False(thumb.ClickBorder.IsHitTestVisible);
+                Assert.Equal(Visibility.Hidden, thumb.CloseButton!.Visibility);
+
+                Pump(frame, manager);
+                Assert.True(settled);
+                Assert.False(manager.IsAnimating);
+                Assert.True(thumb.ClickBorder.IsHitTestVisible);
+                Assert.Equal((50d, 100d, 150d, 75d), (Canvas.GetLeft(thumb.ClickBorder),
+                    Canvas.GetTop(thumb.ClickBorder), thumb.ClickBorder.Width, thumb.ClickBorder.Height));
+                Assert.Equal(Visibility.Visible, thumb.CloseButton.Visibility);
+                Assert.True(thumb.CloseButton.IsEnabled);
+            }
+            finally { manager.StopAllAnimations(); }
+        });
+
     [Fact]
     public void ReleaseAnimationRestoresOriginalSlotWithoutMutatingLayoutAndReportsMissingDwmSource()
         => RunSta(() =>

@@ -135,10 +135,8 @@ public class AppExposeNativeTests
             });
             SetAppId(owner.Handle, "MissionView.Tests!PointerOwner");
             var activation = new WindowActivation();
-            Assert.True(GetWindowRect(child.Handle, out var bounds));
-            IntPtr hit = WindowFromPoint(new POINT { X = bounds.Left + 10, Y = bounds.Top + 10 });
-            Assert.Equal(child.Handle, hit);
-            var captured = activation.CapturePointerWindow(hit);
+            // Other parallel fixtures can overlap these off-screen coordinates.
+            var captured = activation.CapturePointerWindow(child.Handle);
             Assert.Equal(dialog.Handle, captured.Handle);
             Assert.Equal(Target(dialog.Handle), captured);
             Assert.NotEqual(owner.Handle, captured.Handle);

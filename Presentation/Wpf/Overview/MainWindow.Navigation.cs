@@ -11,6 +11,7 @@ namespace WindowScatter
         private void Window_KeyDown(object sender, KeyEventArgs e)
         {
             if (Keyboard.FocusedElement is MenuItem) return;
+            if (Keyboard.FocusedElement is OverviewCloseButton && e.Key is Key.Return or Key.Space) return;
             bool escape = e.Key == Key.Escape || (e.Key == Key.System && e.SystemKey == Key.Escape);
             if (coordinator.drag.IsPressed)
             {
@@ -18,25 +19,43 @@ namespace WindowScatter
                 e.Handled = true;
                 return;
             }
+            if (SearchBox.IsKeyboardFocused && (composingSearchText || e.Key is Key.ImeProcessed or Key.DeadCharProcessed))
+                return;
+            if (escape && IsSearching && scatterInteraction.IsOpen && !isTransitioning)
+            {
+                if (!e.IsRepeat) coordinator.UpdateSearch("");
+                e.Handled = true;
+                return;
+            }
             if (scatterInteraction.IsOpen && !isScatterActive && !AnyAnimating && !isTransitioning && !coordinator.movingWindow)
             {
                 if (OverviewMoveShortcut.Matches(e.Key, e.SystemKey, Keyboard.Modifiers))
                 {
-                    coordinator.ShowMoveMenu();
+                    bool moveKey = (e.Key == Key.System ? e.SystemKey : e.Key) == Key.M;
+                    if (!moveKey || views.Count > 1) coordinator.ShowMoveMenu();
                     e.Handled = true;
                     return;
                 }
-                if (e.Key == Key.Space)
+                if (e.Key == Key.Space && !IsSearching)
                 {
                     if (previewKey.Press(e.IsRepeat) && !coordinator.navigationPending) coordinator.activeView?.ExpandPreview();
                     e.Handled = true;
                     return;
                 }
-                if (coordinator.Navigate(this, e.Key))
+                bool editing = IsSearching && SearchBox.IsKeyboardFocused &&
+                    (Keyboard.Modifiers & (ModifierKeys.Control | ModifierKeys.Shift)) != 0 &&
+                    e.Key is Key.Left or Key.Right or Key.Up or Key.Down;
+                if (!editing && coordinator.Navigate(this, e.Key))
                 {
                     e.Handled = true;
                     return;
                 }
+            }
+            else if (SearchBox.IsKeyboardFocused &&
+                (e.Key is Key.Tab or Key.Return || (e.Key == Key.Space && !IsSearching)))
+            {
+                e.Handled = true;
+                return;
             }
             if (escape && !e.IsRepeat)
             {
@@ -47,7 +66,9 @@ namespace WindowScatter
 
         private void Window_KeyUp(object sender, KeyEventArgs e)
         {
+            if (Keyboard.FocusedElement is OverviewCloseButton && e.Key == Key.Space) return;
             if (e.Key != Key.Space) return;
+            if (!previewKey.IsHeld && (IsSearching || composingSearchText)) return;
             if (previewKey.Release() && scatterInteraction.IsOpen && !isTransitioning && !coordinator.navigationPending)
                 foreach (var view in views.Where(v => v.previewExpanded || v.animationManager.IsPreviewAnimating))
                     view.AnimatePreview(IntPtr.Zero, default);
@@ -57,20 +78,23 @@ namespace WindowScatter
         private void OnWindowHovered(IntPtr windowHandle)
         {
             if (scatterInteraction.IsOpen && !AnyAnimating && !isTransitioning && !coordinator.drag.IsPressed &&
-                !coordinator.movingWindow && !coordinator.navigationPending)
+                !coordinator.movingWindow && !coordinator.navigationPending &&
+                (!IsSearching || ViewThumbs.Any(t => t.WindowHandle == windowHandle && !t.IsFiltered)))
             {
                 if (!Win32Interop.GetCursorPos(out var cursor))
                 {
                     System.Diagnostics.Trace.TraceWarning("Could not read the pointer position for thumbnail selection.");
                     return;
                 }
-                if (cursor.X == coordinator.lastHoverPosition.X && cursor.Y == coordinator.lastHoverPosition.Y) return;
+                if (Mouse.MiddleButton == MouseButtonState.Pressed ||
+                    cursor.X == coordinator.lastHoverPosition.X && cursor.Y == coordinator.lastHoverPosition.Y) return;
                 coordinator.lastHoverPosition = cursor;
                 SelectWindow(windowHandle);
             }
         }
 
-        private IReadOnlyList<NavigationTarget> NormalNavigationTargets() => windowThumbs.Select(t =>
+        private IReadOnlyList<NavigationTarget> NormalNavigationTargets() => windowThumbs
+            .Where(t => !t.IsFiltered).Select(t =>
             new NavigationTarget(t.Identity, new(monitor.Left + t.TargetX, monitor.Top + t.TargetY,
                 t.TargetWidth, t.TargetHeight))).Where(t => t.IsValid).ToArray();
 
@@ -123,8 +147,8 @@ namespace WindowScatter
             {
                 if (Win32Interop.GetCursorPos(out var cursor)) lastHoverPosition = cursor;
                 else System.Diagnostics.Trace.TraceWarning("Could not read the pointer position after keyboard navigation.");
-                var chrome = (activeView ?? sender).chromeWindow;
-                if (chrome.IsVisible) { chrome.Activate(); chrome.Focus(); }
+                var view = activeView ?? sender;
+                if (view.chromeWindow.IsVisible && !view.SearchBox.IsKeyboardFocused) view.FocusOverviewInput();
                 if (previewKey.IsHeld) activeView?.ExpandPreview();
             }
             var expanded = views.Where(v => v.previewExpanded || v.animationManager.IsPreviewAnimating).ToArray();
@@ -157,6 +181,7 @@ namespace WindowScatter
                 view.thumbnailManager?.SetSelectedWindow(isScatterActive || view.animationManager.IsPreviewAnimating
                     ? IntPtr.Zero : windowHandle);
             }
+            RestorePendingCloseStatus();
             if (previewKey.IsHeld && !navigationPending) activeView.ExpandPreview();
         }
 
@@ -216,15 +241,13 @@ namespace WindowScatter
                     try { thumbnailManager.RestoreSourceStacking(animationManager); }
                     catch (Exception ex) { AbortOverview(ex); return; }
                 }
-                thumbnailManager.SyncClickBordersToThumbs(currentDpiScale);
-                thumbnailManager.SetPreviewAnimating(false);
-                thumbnailManager.SetSelectedWindow(selectedWindowHandle);
+                thumbnailManager.CompleteTransition(currentDpiScale, selectedWindowHandle);
                 animationManager.StartKeepAlive();
                 returned?.Invoke();
             }));
         }
 
-        private void ResetPreview(bool releaseKey = true)
+        private void ResetPreview(bool releaseKey = true, bool restoreSourceStacking = false)
         {
             CancelNavigation();
             if (releaseKey) previewKey.Release();
@@ -240,13 +263,13 @@ namespace WindowScatter
                 if (!animationManager.UpdateThumbnailPosition(thumb))
                     System.Diagnostics.Trace.TraceError("DWM could not restore a thumbnail to its overview slot.");
             }
-            thumbnailManager.SyncClickBordersToThumbs(currentDpiScale);
+            if (restoreSourceStacking) thumbnailManager.RestoreSourceStacking(animationManager);
             if (!isTransitioning && scatterInteraction.IsOpen && Visibility == Visibility.Visible)
             {
-                thumbnailManager.SetPreviewAnimating(false);
-                thumbnailManager.SetSelectedWindow(selectedWindowHandle);
+                thumbnailManager.CompleteTransition(currentDpiScale, selectedWindowHandle);
                 animationManager.StartKeepAlive();
             }
+            else thumbnailManager.SyncClickBordersToThumbs(currentDpiScale);
         }
     }
 }

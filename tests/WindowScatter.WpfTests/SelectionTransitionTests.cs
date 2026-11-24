@@ -1,4 +1,5 @@
 using System.Runtime.ExceptionServices;
+using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Threading;
 using WindowScatter;
@@ -26,7 +27,12 @@ public class SelectionTransitionTests
                         ClickBorder = new Border(), TitleLabel = new TextBlock() }
                 };
                 var manager = new ThumbnailManager(new Canvas(), thumbs, IntPtr.Zero, _ => { }, _ => { });
+                foreach (var thumb in thumbs)
+                    OverviewCloseInput.Attach(thumb, "Document", () => true,
+                        () => throw new InvalidOperationException("A transitioning close control must not act."));
                 manager.SetSelectedWindow(selected);
+                Assert.Equal(1, thumbs[0].CloseButton!.Opacity);
+                Assert.Equal(Visibility.Visible, thumbs[0].CloseButton!.Visibility);
                 manager.SetPreviewAnimating(true);
                 Assert.All(thumbs, t =>
                 {
@@ -38,6 +44,11 @@ public class SelectionTransitionTests
                 manager.BeginTransition(() =>
                 {
                     Assert.All(thumbs, thumb => Assert.Equal(0, thumb.HighlightBorder.Opacity));
+                    Assert.All(thumbs, thumb =>
+                    {
+                        Assert.Equal(Visibility.Hidden, thumb.CloseButton!.Visibility);
+                        Assert.False(thumb.CloseButton.IsEnabled);
+                    });
                     Assert.Equal(selected, thumbs[0].WindowHandle);
                     Assert.Equal(other, thumbs[1].WindowHandle);
                     animationStarted = true;
@@ -45,14 +56,21 @@ public class SelectionTransitionTests
                 Assert.True(animationStarted);
                 Assert.All(thumbs, thumb => Assert.Equal(0, thumb.HighlightBorder.Opacity));
                 manager.SetSelectedWindow(selected);
+                Assert.Equal(Visibility.Hidden, thumbs[0].CloseButton!.Visibility);
                 manager.SetPreviewAnimating(false);
                 Assert.All(thumbs, t =>
                 {
                     Assert.True(t.ClickBorder.IsHitTestVisible);
                     Assert.Equal(1, t.TitleLabel.Opacity);
+                    Assert.Equal(Visibility.Visible, t.CloseButton!.Visibility);
+                    Assert.True(t.CloseButton.IsEnabled);
                 });
                 Assert.Equal(1, selectedOutline.Opacity);
                 Assert.Equal(0, otherOutline.Opacity);
+                var close = thumbs[0].CloseButton!;
+                manager.CleanupAllThumbnails();
+                Assert.Equal(Visibility.Hidden, close.Visibility);
+                Assert.False(close.IsEnabled);
             }
             catch (Exception ex)
             {

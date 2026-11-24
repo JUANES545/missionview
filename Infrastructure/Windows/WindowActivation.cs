@@ -52,10 +52,11 @@ namespace WindowScatter
             return ApplicationIdentityReader.IsEligiblePointedWindow(target) ? target : default;
         }
 
-        public bool TryActivate(WindowActivationTarget target, bool restore, bool wasMaximized, bool ownedForeground)
+        public bool TryActivate(WindowActivationTarget target, bool restore, bool wasMaximized, bool ownedForeground,
+            Func<bool>? stillValid = null)
         {
             if (target.Handle == IntPtr.Zero || target.ThreadId == 0 || target.ProcessId == 0 ||
-                identify(target.Handle) != (target.ThreadId, target.ProcessId))
+                identify(target.Handle) != (target.ThreadId, target.ProcessId) || stillValid?.Invoke() == false)
             {
                 Trace.TraceWarning("Scatter target no longer identifies a valid window.");
                 return false;
@@ -71,7 +72,7 @@ namespace WindowScatter
             if (restore && isMinimized(target.Handle))
                 show(target.Handle, wasMaximized ? SW_SHOWMAXIMIZED : SW_RESTORE);
 
-            if (identify(target.Handle) != (target.ThreadId, target.ProcessId))
+            if (identify(target.Handle) != (target.ThreadId, target.ProcessId) || stillValid?.Invoke() == false)
             {
                 Trace.TraceWarning("Scatter target changed while restoring it.");
                 return false;
@@ -89,12 +90,12 @@ namespace WindowScatter
             => CloseOverviewAndActivate(target, restore, wasMaximized, new HashSet<IntPtr> { host, chrome }, hide);
 
         public bool CloseOverviewAndActivate(WindowActivationTarget target, bool restore, bool wasMaximized,
-            IReadOnlySet<IntPtr> surfaces, Action hide)
+            IReadOnlySet<IntPtr> surfaces, Action hide, Func<bool>? stillValid = null)
         {
             IntPtr active = foreground();
             bool ownedForeground = active != IntPtr.Zero && surfaces.Contains(active);
             hide();
-            return TryActivate(target, restore, wasMaximized, ownedForeground);
+            return TryActivate(target, restore, wasMaximized, ownedForeground, stillValid);
         }
 
         private static (uint Thread, uint Process) IdentifyWindow(IntPtr handle)

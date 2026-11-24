@@ -103,6 +103,19 @@
                     </Style>
                 </TextBlock.Style>
             </TextBlock>
+            <StackPanel x:Name="SearchPanel" Canvas.Right="16" Canvas.Top="4" Panel.ZIndex="1"
+                        Background="{DynamicResource {x:Static SystemColors.WindowBrushKey}}">
+                <TextBlock x:Name="SearchLabel" Text="Search window titles" Padding="5,0,0,2"
+                           Foreground="{DynamicResource {x:Static SystemColors.WindowTextBrushKey}}"/>
+                <TextBox x:Name="SearchBox" Height="28" Padding="5,2" VerticalContentAlignment="Center"
+                         IsTabStop="False" TextChanged="SearchBox_TextChanged"
+                         AutomationProperties.Name="Search window titles"
+                         AutomationProperties.HelpText="Type to filter. Use Tab or arrow keys to select a result, Enter to switch, and Escape to clear."/>
+                <TextBlock x:Name="NoSearchResults" Text="No matching windows" Visibility="Collapsed"
+                           FontSize="11" Padding="5,0" IsHitTestVisible="False"
+                           Foreground="{DynamicResource {x:Static SystemColors.WindowTextBrushKey}}"
+                           AutomationProperties.LiveSetting="Polite"/>
+            </StackPanel>
         </Canvas>
     </Canvas>
 </Window>
