@@ -216,6 +216,25 @@ public class DesktopButtonTests
         });
 
     [Fact]
+    public void SearchFieldHasAnAccessibleLabelAndNoResultsIsALiveRegion()
+        => RunSta(() =>
+        {
+            var host = LoadWindow();
+            try
+            {
+                var field = (TextBox)host.FindName("SearchBox");
+                var name = UIElementAutomationPeer.CreatePeerForElement(field).GetName();
+                Assert.Equal("Search window titles", name);
+                Assert.Equal(name, ((TextBlock)host.FindName("SearchLabel")).Text);
+                var status = (TextBlock)host.FindName("NoSearchResults");
+                Assert.Equal(AutomationLiveSetting.Polite, AutomationProperties.GetLiveSetting(status));
+                Assert.Equal(Visibility.Collapsed, status.Visibility);
+                Assert.False(status.IsHitTestVisible);
+            }
+            finally { host.Close(); }
+        });
+
+    [Fact]
     public void IdleChromeHasOnlyDesktopActionAndShowsMoveFeedbackOnlyWhenNeeded()
         => RunSta(() =>
         {
@@ -280,7 +299,7 @@ public class DesktopButtonTests
             }
         }
         foreach (var attribute in document.Descendants().Attributes().Where(a =>
-            a.Name.LocalName is "PreviewKeyDown" or "Click" or "MouseLeftButtonDown").ToArray())
+            a.Name.LocalName is "PreviewKeyDown" or "Click" or "MouseLeftButtonDown" or "TextChanged").ToArray())
             attribute.Remove();
         return (Window)XamlReader.Parse(document.ToString());
     }

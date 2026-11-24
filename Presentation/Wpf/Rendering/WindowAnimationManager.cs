@@ -72,8 +72,7 @@ namespace WindowScatter
 
             sharedProps = new DWM_THUMBNAIL_PROPERTIES
             {
-                dwFlags = DWM_TNP_RECTDESTINATION | DWM_TNP_OPACITY | DWM_TNP_VISIBLE,
-                fVisible = true,
+                dwFlags = DWM_TNP_RECTDESTINATION | DWM_TNP_OPACITY,
                 fSourceClientAreaOnly = true
             };
         }
@@ -172,9 +171,11 @@ namespace WindowScatter
         public void StartKeepAlive()
         {
             StopKeepAlive();
+            if (windowThumbs.Count == 0) return;
+            var thumbs = windowThumbs.ToArray();
             int gen = ++keepAliveGen;
             keepAliveRunning = true;
-            var thread = new Thread(() => KeepAliveLoop(gen))
+            var thread = new Thread(() => KeepAliveLoop(gen, thumbs))
             {
                 IsBackground = true,
                 Name = "WindowScatterDwmKeepAlive",
@@ -190,23 +191,21 @@ namespace WindowScatter
             keepAliveRunning = false;
             var thread = keepAliveThread;
             keepAliveThread = null;
-            if (thread != null && Thread.CurrentThread != thread && thread.IsAlive)
-            {
-                thread.Join(100);
-            }
+            if (thread != null && Thread.CurrentThread != thread && thread.IsAlive && !thread.Join(100))
+                System.Diagnostics.Trace.TraceWarning("DWM presentation did not release its keep-alive worker within 100ms; generation cancelled.");
         }
 
-        private void KeepAliveLoop(int gen)
+        private void KeepAliveLoop(int gen, WindowThumb[] thumbs)
         {
             bool toggle = false;
-            while (keepAliveRunning && gen == keepAliveGen)
+            while (keepAliveRunning && gen == Volatile.Read(ref keepAliveGen))
             {
                 toggle = !toggle;
                 byte opacity = toggle ? (byte)254 : (byte)255;
 
-                var thumbs = windowThumbs.ToArray();
                 for (int i = 0; i < thumbs.Length; i++)
                 {
+                    if (gen != Volatile.Read(ref keepAliveGen)) return;
                     var thumb = thumbs[i];
                     if (thumb.ThumbnailHandle != IntPtr.Zero)
                     {
@@ -215,16 +214,23 @@ namespace WindowScatter
                 }
 
                 // Keeps DWM composing at native vsync with near-zero CPU usage.
+                if (gen != Volatile.Read(ref keepAliveGen)) return;
                 flush();
             }
         }
 
-        public bool UpdateThumbnailPosition(WindowThumb thumb, byte opacity = 255)
+        public bool UpdateThumbnailPosition(WindowThumb thumb, byte opacity = 255, bool initializeVisibility = false)
         {
             if (thumb.ThumbnailHandle == IntPtr.Zero)
                 return false;
 
             var props = sharedProps;
+            // Geometry and keep-alive updates must not overwrite search visibility.
+            if (initializeVisibility)
+            {
+                props.dwFlags |= DWM_TNP_VISIBLE;
+                props.fVisible = thumb.ClickBorder.Visibility == System.Windows.Visibility.Visible;
+            }
             props.opacity = opacity;
             props.rcDestination.Left = (int)Math.Round(thumb.CurrentX);
             props.rcDestination.Top = (int)Math.Round(thumb.CurrentY);
@@ -236,9 +242,10 @@ namespace WindowScatter
 
         private void StartAnimThread()
         {
+            var thumbs = geometryFrames == null ? windowThumbs.ToArray() : Array.Empty<WindowThumb>();
             int gen = ++animGen;
             animRunning = true;
-            var thread = new Thread(() => AnimLoop(gen))
+            var thread = new Thread(() => AnimLoop(gen, thumbs))
             {
                 IsBackground = true,
                 Name = "WindowScatterAnim",
@@ -258,7 +265,7 @@ namespace WindowScatter
                 System.Diagnostics.Trace.TraceWarning("DWM presentation did not release its animation worker within 250ms; generation cancelled.");
         }
 
-        private void AnimLoop(int gen)
+        private void AnimLoop(int gen, WindowThumb[] thumbs)
         {
             long freq = System.Diagnostics.Stopwatch.Frequency;
             for (;;)
@@ -287,7 +294,7 @@ namespace WindowScatter
                         if (!UpdateThumbnailPosition(frame.Thumb) && gen == Volatile.Read(ref animGen)) geometryFailed = true;
                     }
                 }
-                else foreach (var thumb in windowThumbs.ToArray())
+                else foreach (var thumb in thumbs)
                 {
                     if (gen != Volatile.Read(ref animGen)) return;
                     double aspect = thumb.StartHeight > 0
@@ -318,11 +325,11 @@ namespace WindowScatter
             }
 
             if (gen != Volatile.Read(ref animGen)) return;
-            animRunning = false;
             uiDispatcher.BeginInvoke(new Action(() =>
             {
                 if (gen != animGen)
                     return;
+                animRunning = false;
                 FinishAnimation();
             }));
         }
@@ -349,13 +356,8 @@ namespace WindowScatter
             {
                 FlushFrameLog("scatter");
                 foreach (var thumb in windowThumbs)
-                {
-                    if (thumb.ClickBorder != null) thumb.ClickBorder.IsHitTestVisible = true;
-                    if (thumb.TitleLabel != null) thumb.TitleLabel.Opacity = 1;
                     UpdateThumbnailPosition(thumb);
-                }
-
-                try { OnScatterComplete?.Invoke(); } catch { }
+                OnScatterComplete?.Invoke();
 
                 // Scatter complete: keep DWM warm and ready while the overlay sits idle.
                 StartKeepAlive();

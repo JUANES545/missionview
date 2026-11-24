@@ -40,8 +40,8 @@ public partial class MainWindow
         {
             view.ResetPreview();
             view.animationManager.StopAllAnimations();
-            view.thumbnailManager.BeginTransition(() => { });
             view.dragPreview = new(new WindowInteropHelper(view).Handle, drag.Target);
+            view.thumbnailManager.BeginTransition(() => { });
         }
         if (!dragSource.animationManager.UpdateThumbnailPosition(dragThumb, 72))
             throw new InvalidOperationException("DWM could not mark the dragged thumbnail.");
@@ -79,6 +79,7 @@ public partial class MainWindow
             {
                 if (dragThumb != null && ReferenceEquals(view, dragSource) && !view.animationManager.UpdateThumbnailPosition(dragThumb))
                     System.Diagnostics.Trace.TraceError("DWM could not restore the source thumbnail after dragging.");
+                view.thumbnailManager.SetPreviewAnimating(false);
                 view.thumbnailManager.SetSelectedWindow(selectedWindowHandle);
                 view.animationManager.StartKeepAlive();
             }

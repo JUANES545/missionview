@@ -108,6 +108,7 @@ namespace WindowScatter
             desktopToggle = services.Desktop;
             previewKey = session.PreviewKey;
             InitializeComponent();
+            ConfigureSearchInput();
             AccessKeyManager.Register("S", DesktopButton);
             RenderCanvas.Children.Remove(ChromeCanvas);
             chromeWindow = new OverviewChromeWindow(this, ChromeCanvas);
@@ -119,6 +120,7 @@ namespace WindowScatter
                 {
                     coordinator.CancelDrag();
                     foreach (var view in views) view.ResetPreview();
+                    coordinator.TryExposeCloseAttention();
                 }
             }));
             SystemParameters.StaticPropertyChanged += OnSystemParametersChanged;
@@ -203,14 +205,23 @@ namespace WindowScatter
 
             animationManager.OnScatterComplete = () =>
             {
-                if (minimizedStrip != null)
+                try
                 {
-                    minimizedStrip.Visibility = Visibility.Visible;
-                    minimizedStrip.SetSelected(selectedWindowHandle);
+                    if (scatterInteraction.IsOpen && !isTransitioning && !coordinator.drag.IsPressed)
+                    {
+                        thumbnailManager.CompleteTransition(currentDpiScale, selectedWindowHandle);
+                        if (minimizedStrip != null)
+                        {
+                            minimizedStrip.Visibility = Visibility.Visible;
+                            minimizedStrip.SetSelected(selectedWindowHandle);
+                        }
+                    }
                 }
-                try { thumbnailManager.SyncClickBordersToThumbs(currentDpiScale); } catch { }
-                if (scatterInteraction.IsOpen && !isTransitioning && !coordinator.drag.IsPressed)
-                    thumbnailManager.SetSelectedWindow(selectedWindowHandle);
+                catch (Exception error) when (error is InvalidOperationException or ArgumentException)
+                {
+                    AbortOverview(error);
+                    return;
+                }
                 // Let FinishAnimation complete its keep-alive setup before
                 // starting a return animation requested while opening.
                 Dispatcher.BeginInvoke(new Action(coordinator.TryDismissScatter));
@@ -349,6 +360,7 @@ namespace WindowScatter
 
         protected override void OnClosed(EventArgs e)
         {
+            if (IsCoordinator) StopCloseObservation();
             AccessKeyManager.Unregister("S", DesktopButton);
             SystemParameters.StaticPropertyChanged -= OnSystemParametersChanged;
             if (IsCoordinator)
@@ -441,6 +453,7 @@ namespace WindowScatter
         {
             if (!IsCoordinator) { coordinator.AbortOverview(error); return; }
             System.Diagnostics.Trace.TraceError($"Overview closed after a composition error: {error}");
+            layoutCalculators.Clear();
             CancelDrag();
             HideAllViews();
             scatterInteraction.TryBeginClose(null, out _);
@@ -499,6 +512,7 @@ namespace WindowScatter
         private void RequestDismissScatter()
         {
             if (coordinator.reportingMoveError) return;
+            if (coordinator.windowClose.HasPending) { coordinator.ReturnToPendingClose(); return; }
             if (coordinator.movingWindow) { coordinator.CancelSessionImmediately(); return; }
             if (isTransitioning || (!isScatterActive && this.Visibility != Visibility.Visible)) return;
             scatterInteraction.RequestDismiss();
@@ -562,8 +576,7 @@ namespace WindowScatter
                 foreach (var view in views) view.ShowView();
                 activeView = this;
                 SelectWindow(OverviewPreview.InitialSelection(previousWindow, AllThumbs().Select(t => t.WindowHandle)));
-                activeView!.chromeWindow.Activate();
-                activeView.chromeWindow.Focus();
+                activeView!.FocusOverviewInput();
                 ApplyWorkingSetFloor();
                 foreach (var view in views)
                     view.thumbnailManager.BeginTransition(view.animationManager.StartScatterAnimation);
@@ -587,7 +600,8 @@ namespace WindowScatter
 
         private void OnWindowClicked(IntPtr windowHandle)
         {
-            var thumb = coordinator.AllThumbs().FirstOrDefault(t => t.WindowHandle == windowHandle);
+            var thumb = coordinator.AllThumbs().FirstOrDefault(t =>
+                t.WindowHandle == windowHandle && !t.IsFiltered);
             if (thumb != null) coordinator.CloseAllViews(thumb.Identity);
         }
 
@@ -885,6 +899,7 @@ namespace WindowScatter
         private void FullCleanup()
         {
             appExposeRequest = null;
+            searchQuery = "";
             moveCancellation?.Cancel();
             CancelDrag();
             foreach (var view in views.ToArray()) view.CleanupView();

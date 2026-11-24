@@ -9,7 +9,15 @@ namespace WindowScatter
         internal const double SideInset = 14;
         internal const double BottomInset = 36;
         internal const double ToolbarHeight = 64;
+        private readonly Dictionary<WindowActivationTarget, (PhysicalWindowRect Source, double X, double Y)> previous = new();
+        private (double Width, double Height, double Dpi, string Size) previousContext;
+        private double previousScale;
 
+        internal void KeepRegisteredIdentities(IEnumerable<WindowActivationTarget> identities)
+        {
+            var registered = identities.ToHashSet();
+            foreach (var identity in previous.Keys.Where(i => !registered.Contains(i)).ToArray()) previous.Remove(identity);
+        }
         public List<WindowLayout> CalculateLayouts(List<WindowInfo> windows, double screenW, double screenH,
             double dpiScale = 1, string thumbnailSize = "Standard")
         {
@@ -22,7 +30,9 @@ namespace WindowScatter
                 "Large" => .75,
                 _ => throw new ArgumentException("Unsupported thumbnail size.", nameof(thumbnailSize))
             };
-            if (windows.Count == 0) return new();
+            var context = (screenW, screenH, dpiScale, thumbnailSize);
+            if (previousContext != context) previous.Clear();
+            if (windows.Count == 0) { previous.Clear(); return new(); }
             if (windows.Any(w => Width(w) <= 0 || Height(w) <= 0))
                 throw new ArgumentException("Window dimensions must be positive.", nameof(windows));
 
@@ -38,14 +48,32 @@ namespace WindowScatter
             int bestColumns = 0;
             for (int columns = 1; columns <= ordered.Count; columns++)
             {
-                var rows = ordered.Chunk(columns).ToArray();
-                double height = rows.Sum(row => row.Max(Height));
-                double scale = Math.Min(maximumScale, (availableH - (rows.Length - 1) * (side + bottom)) / height);
-                foreach (var row in rows)
-                    scale = Math.Min(scale, (availableW - (row.Length - 1) * 2 * side) / row.Sum(Width));
+                int fullRows = (ordered.Count - 1) / columns;
+                int lastColumns = ordered.Count - fullRows * columns;
+                double height = 0, widestFullRow = 0, lastRowWidth = 0;
+                for (int i = 0; i < ordered.Count;)
+                {
+                    double rowWidth = 0, rowHeight = 0;
+                    int end = i + Math.Min(columns, ordered.Count - i);
+                    for (; i < end; i++)
+                    {
+                        rowWidth += Width(ordered[i]);
+                        rowHeight = Math.Max(rowHeight, Height(ordered[i]));
+                    }
+                    height += rowHeight;
+                    if (i == ordered.Count) lastRowWidth = rowWidth;
+                    else widestFullRow = Math.Max(widestFullRow, rowWidth);
+                }
+                // Full rows have the same gaps; only the widest and the final row can constrain scale.
+                double fullGaps = (columns - 1) * 2 * side, lastGaps = (lastColumns - 1) * 2 * side;
+                double verticalGaps = fullRows * (side + bottom);
+                double scale = Math.Min(maximumScale, (availableH - verticalGaps) / height);
+                if (fullRows > 0) scale = Math.Min(scale, (availableW - fullGaps) / widestFullRow);
+                scale = Math.Min(scale, (availableW - lastGaps) / lastRowWidth);
                 if (scale <= 0) continue;
-                double groupW = rows.Max(row => row.Sum(Width) * scale + (row.Length - 1) * 2 * side);
-                double groupH = height * scale + (rows.Length - 1) * (side + bottom);
+                double groupW = lastRowWidth * scale + lastGaps;
+                if (fullRows > 0) groupW = Math.Max(groupW, widestFullRow * scale + fullGaps);
+                double groupH = height * scale + verticalGaps;
                 double shape = Math.Abs(Math.Log(groupW / groupH / (availableW / availableH)));
                 if (scale > bestScale + 1e-10 || (Math.Abs(scale - bestScale) <= 1e-10 && shape < bestShape))
                 {
@@ -63,15 +91,38 @@ namespace WindowScatter
                 .ThenBy(w => w.Handle.ToInt64()).ToList();
             double searchScale = Math.Min(maximumScale,
                 windows.Min(w => Math.Min(availableW / Width(w), availableH / Height(w))));
+            var retained = windows.Where(w => w.Identity.Handle == w.Handle && w.Identity.ThreadId != 0 &&
+                w.Identity.ProcessId != 0 && previous.TryGetValue(w.Identity, out var old) &&
+                old.Source.Equals(w.OriginalRect)).ToDictionary(w => w.Identity, w => previous[w.Identity]);
+            if (retained.Count > 0 && previousScale > 0 && previousScale <= searchScale)
+            {
+                var stable = TryPlace(searchOrder, previousScale, left, top, availableW, availableH, side, bottom, retained);
+                if (stable != null) return Remember(stable, context, previousScale);
+            }
             while (true)
             {
                 var placed = TryPlace(searchOrder, searchScale, left, top, availableW, availableH, side, bottom);
-                if (placed != null) return placed;
+                if (placed != null) return Remember(placed, context, searchScale);
                 // Greedy search is incomplete; the compact row fit bounds retries.
                 if (searchScale <= bestScale)
-                    return PlaceGrid(ordered, bestScale, bestColumns, left, top, availableW, availableH, dpiScale);
+                    return Remember(PlaceGrid(ordered, bestScale, bestColumns, left, top, availableW, availableH, dpiScale),
+                        context, bestScale);
                 searchScale = Math.Max(bestScale, searchScale * .9);
             }
+
+        }
+
+        private List<WindowLayout> Remember(List<WindowLayout> layouts,
+            (double Width, double Height, double Dpi, string Size) context, double scale)
+        {
+            previous.Clear();
+            foreach (var layout in layouts)
+                if (layout.Window.Identity.Handle == layout.Window.Handle && layout.Window.Identity.ThreadId != 0 &&
+                    layout.Window.Identity.ProcessId != 0)
+                    previous.Add(layout.Window.Identity, (layout.Window.OriginalRect, layout.X, layout.Y));
+            previousContext = context;
+            previousScale = scale;
+            return layouts;
         }
 
         private static double Width(WindowInfo w) => (double)w.OriginalRect.Right - w.OriginalRect.Left;
@@ -82,7 +133,8 @@ namespace WindowScatter
             .ThenBy(w => w.Handle.ToInt64()).ToList();
 
         private static List<WindowLayout>? TryPlace(List<WindowInfo> windows, double scale,
-            double left, double top, double availableW, double availableH, double side, double bottom)
+            double left, double top, double availableW, double availableH, double side, double bottom,
+            Dictionary<WindowActivationTarget, (PhysicalWindowRect Source, double X, double Y)>? retained = null)
         {
             var anchors = windows.Select(w => new WindowLayout
             {
@@ -93,11 +145,37 @@ namespace WindowScatter
                 Y = Math.Clamp(w.OriginalRect.Top + Height(w) * (1 - scale) / 2,
                     top, Math.Max(top, top + availableH - Height(w) * scale))
             }).ToList();
+            var placed = new List<WindowLayout>();
+            foreach (var a in anchors)
+                if (retained != null && retained.TryGetValue(a.Window.Identity, out var old))
+                {
+                    if (!double.IsFinite(old.X + old.Y) || old.X < left || old.Y < top ||
+                        old.X + a.Width > left + availableW + 1e-7 ||
+                        old.Y + a.Height > top + availableH + 1e-7) return null;
+                    a.X = old.X; a.Y = old.Y;
+                    if (OverlapsAny(a.X, a.Y, a, placed, side, bottom)) return null;
+                    placed.Add(a);
+                }
             // Reserve independent anchors before moving colliding windows into free slots.
-            var placed = anchors.Where(a => anchors.All(b => ReferenceEquals(a, b) ||
-                !Overlaps(a.X, a.Y, a, b, side, bottom))).ToList();
+            foreach (var anchor in anchors)
+                if (!placed.Contains(anchor) && !OverlapsAny(anchor.X, anchor.Y, anchor, anchors, side, bottom))
+                    placed.Add(anchor);
+            if (placed.Count == anchors.Count) return anchors;
+            var originals = anchors.Select(a => (a.X, a.Y)).ToArray();
+            var independent = placed.ToList();
             var grouped = TryPlaceGroups(anchors, placed, left, top, availableW, availableH, side, bottom);
             if (grouped != null) return grouped;
+            bool keptGroups = placed.Count > independent.Count;
+            if (TryPlaceIndividuals(anchors, placed, left, top, availableW, availableH, side, bottom)) return anchors;
+            if (!keptGroups) return null;
+            // A compact component must not make an otherwise feasible individual fit fail.
+            for (int i = 0; i < anchors.Count; i++) (anchors[i].X, anchors[i].Y) = originals[i];
+            return TryPlaceIndividuals(anchors, independent, left, top, availableW, availableH, side, bottom) ? anchors : null;
+        }
+
+        private static bool TryPlaceIndividuals(List<WindowLayout> anchors, List<WindowLayout> placed,
+            double left, double top, double availableW, double availableH, double side, double bottom)
+        {
             foreach (var layout in anchors)
             {
                 if (placed.Contains(layout)) continue;
@@ -119,15 +197,15 @@ namespace WindowScatter
                 foreach (double y in candidateYs)
                 {
                     double distance = (x - anchorX) * (x - anchorX) + (y - anchorY) * (y - anchorY);
-                    if (distance >= bestDistance || placed.Any(o => Overlaps(x, y, layout, o, side, bottom))) continue;
+                    if (distance >= bestDistance || OverlapsAny(x, y, layout, placed, side, bottom)) continue;
                     bestDistance = distance;
                     layout.X = x; layout.Y = y;
                     found = true;
                 }
-                if (!found) return null;
+                if (!found) return false;
                 placed.Add(layout);
             }
-            return anchors;
+            return true;
         }
 
         private static List<WindowLayout>? TryPlaceGroups(List<WindowLayout> anchors, List<WindowLayout> independent,
@@ -151,7 +229,7 @@ namespace WindowScatter
                     .ThenBy(a => a.Window.OriginalRect.Left + a.OrigWidth / 2)
                     .ThenBy(a => a.Window.Handle.ToInt64()).ToList();
                 double bestDistance = double.PositiveInfinity;
-                Dictionary<WindowLayout, (double X, double Y)>? best = null;
+                (Dictionary<WindowLayout, (double X, double Y)> Offsets, double X, double Y)? best = null;
                 // Bounded compact row shapes; an unfittable envelope keeps the existing fallback.
                 for (int columns = 1; columns <= group.Count; columns++)
                 {
@@ -191,27 +269,42 @@ namespace WindowScatter
                     foreach (double x in candidateXs)
                     foreach (double y in candidateYs)
                     {
-                        if (placed.Any(o => Overlaps(x, y, envelope, o, side, bottom))) continue;
-                        double distance = group.Sum(a => Math.Pow(x + offsets[a].X - a.X, 2) +
-                            Math.Pow(y + offsets[a].Y - a.Y, 2));
+                        if (OverlapsAny(x, y, envelope, placed, side, bottom)) continue;
+                        double distance = 0;
+                        foreach (var a in group)
+                        {
+                            var offset = offsets[a];
+                            distance += Math.Pow(x + offset.X - a.X, 2) + Math.Pow(y + offset.Y - a.Y, 2);
+                        }
                         if (distance >= bestDistance) continue;
                         bestDistance = distance;
-                        best = group.ToDictionary(a => a, a => (x + offsets[a].X, y + offsets[a].Y));
+                        best = (offsets, x, y);
                     }
                 }
-                if (best == null) return null;
+                if (best is not { } placement) continue;
                 foreach (var a in group)
                 {
-                    positions[a] = best[a];
-                    placed.Add(new WindowLayout { X = best[a].X, Y = best[a].Y, Width = a.Width, Height = a.Height });
+                    var offset = placement.Offsets[a];
+                    var position = (X: placement.X + offset.X, Y: placement.Y + offset.Y);
+                    positions[a] = position;
+                    placed.Add(new WindowLayout { X = position.X, Y = position.Y, Width = a.Width, Height = a.Height });
                 }
             }
             foreach (var (layout, position) in positions)
             {
                 layout.X = position.X;
                 layout.Y = position.Y;
+                independent.Add(layout);
             }
-            return anchors;
+            return independent.Count == anchors.Count ? anchors : null;
+        }
+
+        private static bool OverlapsAny(double x, double y, WindowLayout layout, List<WindowLayout> others,
+            double side, double bottom)
+        {
+            foreach (var other in others)
+                if (!ReferenceEquals(layout, other) && Overlaps(x, y, layout, other, side, bottom)) return true;
+            return false;
         }
 
         private static bool Overlaps(double x, double y, WindowLayout layout, WindowLayout other, double side, double bottom)

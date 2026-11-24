@@ -34,7 +34,8 @@ namespace WindowScatter
             Height = monitor.Height / currentDpiScale;
             Left = monitor.Left / currentDpiScale;
             Top = monitor.Top / currentDpiScale;
-            MoveStatus.Width = Math.Max(0, Width - 88);
+            SearchPanel.Width = Math.Min(260, Math.Max(0, Width - 96) / 2);
+            MoveStatus.Width = Math.Max(0, Width - 96 - SearchPanel.Width);
             EmptyMessage.Width = Math.Min(360, Math.Max(0, Width - 32));
             Canvas.SetLeft(EmptyMessage, (Width - EmptyMessage.Width) / 2);
             Canvas.SetTop(EmptyMessage, Height / 2 - 30);
@@ -66,6 +67,7 @@ namespace WindowScatter
 
         private void HideAllViews()
         {
+            StopCloseObservation();
             CloseMoveMenus();
             foreach (var view in views.ToArray())
             {
@@ -77,6 +79,8 @@ namespace WindowScatter
         private void CleanupView()
         {
             InvalidateNavigation();
+            SearchBox.Text = "";
+            NoSearchResults.Visibility = Visibility.Collapsed;
             CleanupMinimizedStrip();
             animationManager?.StopAllAnimations();
             thumbnailManager?.CleanupAllThumbnails();
@@ -132,9 +136,12 @@ namespace WindowScatter
         {
             var border = thumb.ClickBorder;
             ConfigureThumbnailAutomation(thumb);
+            ConfigureCloseInput(thumb);
             border.MouseLeftButtonDown += (_, e) =>
             {
-                if (!scatterInteraction.IsOpen || AnyAnimating || isScatterActive || isTransitioning || coordinator.movingWindow) return;
+                if (e.OriginalSource is DependencyObject source && OverviewCloseInput.IsCloseSource(source, thumb.CloseButton)) return;
+                if (thumb.IsFiltered || !scatterInteraction.IsOpen || AnyAnimating || isScatterActive ||
+                    isTransitioning || coordinator.movingWindow) return;
                 try
                 {
                     SelectWindow(thumb.WindowHandle);
@@ -194,7 +201,8 @@ namespace WindowScatter
             };
             border.ContextMenuOpening += (_, e) =>
             {
-                if (!scatterInteraction.IsOpen || isTransitioning || AnyAnimating || isScatterActive || coordinator.movingWindow)
+                if (thumb.IsFiltered || !scatterInteraction.IsOpen || isTransitioning || AnyAnimating ||
+                    isScatterActive || coordinator.movingWindow)
                 { e.Handled = true; return; }
                 coordinator.SelectWindow(thumb.WindowHandle);
                 border.ContextMenu = CreateMoveMenu(thumb, border);
@@ -212,8 +220,8 @@ namespace WindowScatter
         private void ShowMoveMenu()
         {
             var view = ViewFor(selectedWindowHandle);
-            var thumb = view?.windowThumbs.FirstOrDefault(t => t.WindowHandle == selectedWindowHandle);
-            if (views.Count < 2 || thumb == null || !scatterInteraction.IsOpen || isTransitioning || movingWindow || AnyAnimating) return;
+            var thumb = view?.ViewThumbs.FirstOrDefault(t => t.WindowHandle == selectedWindowHandle);
+            if (thumb == null || thumb.IsFiltered || !scatterInteraction.IsOpen || isTransitioning || movingWindow || AnyAnimating) return;
             var menu = view!.CreateMoveMenu(thumb, thumb.ClickBorder);
             menu.IsOpen = true;
         }
@@ -236,7 +244,13 @@ namespace WindowScatter
                 openMoveMenus.Remove(menu);
                 scatterInteraction.UnregisterSurface(popup);
             };
-            foreach (var destination in OrderedViews())
+            var closeItem = new MenuItem { Header = "Close window", IsEnabled = CanCloseWindow(thumb, generation) };
+            closeItem.Click += (_, _) =>
+            {
+                menu.IsOpen = false;
+                RequestWindowClose(thumb, generation);
+            };
+            foreach (var destination in OrderedViews().Where(_ => !thumb.WasMinimized && views.Count > 1))
             {
                 var item = new MenuItem
                 {
@@ -252,6 +266,8 @@ namespace WindowScatter
                 };
                 menu.Items.Add(item);
             }
+            if (menu.Items.Count > 0) menu.Items.Add(new Separator());
+            menu.Items.Add(closeItem);
             return menu;
         }
 
@@ -299,7 +315,8 @@ namespace WindowScatter
                 var windows = EnumerateOverviewWindows();
                 foreach (var view in views) view.RebuildThumbnails(zOrder, windows[view.monitor.Handle], settled: true);
                 session.Select(IntPtr.Zero);
-                SelectWindow(AllThumbs().Any(t => t.WindowHandle == target.Handle) ? target.Handle :
+                if (IsSearching) RefreshSearchResults(target.Handle);
+                else SelectWindow(AllThumbs().Any(t => t.WindowHandle == target.Handle) ? target.Handle :
                     AllThumbs().FirstOrDefault()?.WindowHandle ?? IntPtr.Zero);
                 if (failure == null) destination.MoveStatus.Text = AllThumbs().Any(t => t.WindowHandle == target.Handle)
                     ? "Window moved" : "Window moved; preview unavailable";
@@ -368,6 +385,7 @@ namespace WindowScatter
 
         private void CancelForTopologyChange()
         {
+            layoutCalculators.Clear();
             if (scatterInteraction.IsOpen) CancelSessionImmediately();
             else if (IsVisible)
             {
