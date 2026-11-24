@@ -19,10 +19,13 @@ namespace WindowScatter
             enumeratedWindowCount = windows.Count;
             RebuildMinimizedStrip(windows, settled);
             RefreshOverviewPresentation(SystemParameters.HighContrast, SystemParameters.ClientAreaAnimation);
-            var layouts = new WindowLayoutCalculator().CalculateLayouts(windows.Where(w => !w.WasMinimized).ToList(),
+            var layouts = LayoutCalculatorForDisplay().CalculateLayouts(windows.Where(w => !w.WasMinimized).ToList(),
                 monitor.Width, OverviewContentHeight, currentDpiScale, settings.ThumbnailSize);
             thumbnailManager.SourceOrder = sourceOrder;
-            thumbnailManager.RegisterThumbnails(layouts, animationManager, currentDpiScale, settled);
+            string foldedQuery = OverviewTitleSearch.Fold(coordinator.searchQuery);
+            thumbnailManager.RegisterThumbnails(layouts, animationManager, currentDpiScale, settled, foldedQuery);
+            minimizedStrip?.ApplyTitleFilter(foldedQuery);
+            LayoutCalculatorForDisplay().KeepRegisteredIdentities(windowThumbs.Select(t => t.Identity));
             windowSwitcher = new WindowSwitcher(thumbnailManager, animationManager, windowThumbs, layouts);
             if (coordinator.selectedWindowHandle != IntPtr.Zero && coordinator.ViewFor(coordinator.selectedWindowHandle) == null)
                 coordinator.SelectWindow(IntPtr.Zero);
@@ -35,8 +38,7 @@ namespace WindowScatter
             EmptyMessage.Visibility = !ViewThumbs.Any() ? Visibility.Visible : Visibility.Hidden;
             MoveStatus.Text = IdleMoveStatus;
             if (!settled) return;
-            thumbnailManager.SyncClickBordersToThumbs(currentDpiScale);
-            thumbnailManager.SetPreviewAnimating(false);
+            thumbnailManager.CompleteTransition(currentDpiScale, selectedWindowHandle);
             animationManager.StartKeepAlive();
         }
 
@@ -56,6 +58,7 @@ namespace WindowScatter
                     coordinator.SelectWindow(handle);
                 })
             { Visibility = settled ? Visibility.Visible : Visibility.Hidden };
+            foreach (var thumb in minimizedStrip.Thumbs) ConfigureCloseInput(thumb);
             Panel.SetZIndex(minimizedStrip, 2);
             ChromeCanvas.Children.Add(minimizedStrip);
         }

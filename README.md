@@ -16,13 +16,23 @@ Press `Win+W` to open the overview. Click a window to switch to it, or press `Es
 
 ## Find your window
 
-Hold `Space` to enlarge a live preview. Keep holding it while you navigate to preview another window.
+Type part of a window title to filter the overview, including App Exposé. Matching previews stay in their slots. Press `Escape` to clear the search.
+
+With the search empty, hold `Space` to enlarge a live preview. Keep holding it while you navigate to preview another window.
 
 Overlapping previews stay together near their original positions when a compact group fits, without moving independent previews. Otherwise, MissionView keeps its individual-placement and grid fallbacks.
+
+Closing or adding a window keeps unchanged previews in their last positions when a local placement fits. Reopening the same overview uses that layout too. Moving or resizing a real window reanchors its preview; changing displays, DPI, thumbnail size, overview scope or application discards the incompatible layout. Positions stay in memory only, without saving window titles or screenshots.
 
 Point at an application and press `Win+Shift+W` to see its windows with App Exposé. Browse its minimized windows in the bottom shelf; they stay minimized until you choose one.
 
 Drag a window preview to another display and release to move it. Press `Escape` to cancel the drag.
+
+Once the overview settles, middle-click a preview or click its circular **X** to request normal window closure. The X appears at the top-left when you point at or select a preview, including displayed minimized windows in App Exposé. Select a window and open its menu with `Shift+F10` or the Menu key to choose **Close window** without a mouse.
+
+Ordinary successful closes keep you in the overview. MissionView keeps the preview until Windows no longer identifies the original window. It leaves the overview for a visible, enabled owned prompt when its owner is disabled, or when the last requested window or one of its owned windows takes focus. It checks window identity and ownership before handing off; it does not treat other windows from the same process as prompts.
+
+Custom or in-window prompts may not be identifiable. Press `Escape` to check the last window you requested closed, rather than the window you were using before opening the overview, if it still matches its captured identity. MissionView restores that window only if needed and respects another application's foreground focus. It sends one close request per window in an overview session; reopening the overview lets you make a new request. It does not dismiss save prompts or force an application to quit.
 
 Use the desktop button or `Alt+S` in the overview to show or restore the desktop. You can also use the tray menu.
 
@@ -32,12 +42,13 @@ Use the desktop button or `Alt+S` in the overview to show or restore the desktop
 | --- | --- |
 | Overview shortcut (default `Win+W`) | Open the overview; press again to switch to the selection |
 | App Exposé shortcut (default `Win+Shift+W`) | Show windows from the application under the pointer; press again to switch to the selection |
-| Arrow keys | Select a window in that direction |
-| `Tab` / `Shift+Tab` | Select the next / previous window in visual order |
+| Arrow keys | Select a matching window in that direction |
+| `Tab` / `Shift+Tab` | Select the next / previous matching window in visual order |
 | `Enter` | Switch to the selected window |
-| Hold `Space` | Enlarge the selected live preview |
+| Hold `Space` | Enlarge the selected live preview when the search is empty |
+| `Shift+F10` / Menu key | Open the selected window's menu, including **Close window** |
 | `Alt+S` | Show or restore the desktop from the overview |
-| `Escape` | Cancel without switching |
+| `Escape` | Clear the search, or cancel without switching if the search is empty |
 
 Set either shortcut in **Settings → Shortcuts**. App Exposé follows `Shift` + the overview shortcut until you assign it a separate combination. If the overview shortcut already includes `Shift`, assign App Exposé its own shortcut.
 
