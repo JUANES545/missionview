@@ -6,6 +6,11 @@ namespace WindowScatter
     internal static class KeyboardMenuMask
     {
         internal delegate uint SendInputEvents(uint count, INPUT[] inputs, int size);
+        private static readonly OverviewHotkey WinF12 = OverviewHotkey.Parse("Win+F12");
+
+        internal static bool IsDragShortcut(OverviewShortcutEvent input, OverviewHotkey? normal) =>
+            input.Suppress && input.Activate && !input.AppExpose && input.MaskMenus &&
+            normal == WinF12 && input.Modifiers == WinF12.Modifiers;
 
         public static bool TrySend(SendInputEvents send)
         {

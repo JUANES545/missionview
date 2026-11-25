@@ -85,6 +85,26 @@ public class KeyboardModifierTests
     }
 
     [Fact]
+    public void FileDragMasksOnlyARecognizedWinF12OverviewPress()
+    {
+        var hotkeys = new OverviewHotkeys((_, _) => true, _ => true);
+        Assert.True(hotkeys.TryInitialize("Win+F12", out var error), error);
+        var interaction = new ScatterInteraction();
+        var source = new OverviewShortcutInput(interaction, () => default, () => default);
+        Assert.False(KeyboardMenuMask.IsDragShortcut(source.Process(VK_LWIN, true, false, hotkeys), hotkeys.Normal));
+        var open = source.Process(0x7B, true, false, hotkeys);
+        Assert.True(KeyboardMenuMask.IsDragShortcut(open, hotkeys.Normal));
+        Assert.False(KeyboardMenuMask.IsDragShortcut(source.Process(0x7B, true, false, hotkeys), hotkeys.Normal));
+        Assert.False(KeyboardMenuMask.IsDragShortcut(source.Process(0x7B, false, false, hotkeys), hotkeys.Normal));
+        interaction.BeginSession(default);
+        var confirm = source.Process(0x7B, true, false, hotkeys);
+        Assert.True(KeyboardMenuMask.IsDragShortcut(confirm, hotkeys.Normal));
+        Assert.False(KeyboardMenuMask.IsDragShortcut(confirm with { AppExpose = true }, hotkeys.Normal));
+        Assert.False(KeyboardMenuMask.IsDragShortcut(confirm with { Modifiers = 0x09 }, hotkeys.Normal));
+        Assert.False(KeyboardMenuMask.IsDragShortcut(confirm, OverviewHotkey.Parse("Win+F11")));
+    }
+
+    [Fact]
     public void RepeatedAndNonModifierKeysDoNotChangeModifiers()
     {
         var state = new KeyboardModifierState();
