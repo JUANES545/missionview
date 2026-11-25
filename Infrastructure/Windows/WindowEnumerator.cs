@@ -28,9 +28,10 @@ namespace WindowScatter
 
         public Dictionary<IntPtr, List<WindowInfo>> EnumerateByMonitor(IReadOnlyList<MonitorHelper.MonitorBounds> monitors,
             AppExposeRequest? request = null, bool showMinimizedWindows = true,
-            IReadOnlyList<MonitorHelper.MonitorBounds>? visibleMonitors = null)
+            IReadOnlyList<MonitorHelper.MonitorBounds>? visibleMonitors = null, bool showMinimizedInOverview = false)
         {
             visibleMonitors ??= monitors;
+            bool includeMinimized = request == null ? showMinimizedInOverview : showMinimizedWindows;
             var windows = new List<(IntPtr Monitor, WindowInfo Window)>();
 
 #if ENUMERATION_DIAGNOSTICS
@@ -45,7 +46,7 @@ namespace WindowScatter
                     uint thread = GetWindowThreadProcessId(h, out uint process);
                     if (thread == 0 || process == 0) return true;
                     bool minimized = IsIconic(h);
-                    if (minimized && (request == null || !showMinimizedWindows)) return true;
+                    if (minimized && !includeMinimized) return true;
 
                     int extendedStyle = GetWindowLong(h, GWL_EXSTYLE);
                     if (extendedStyle == 0 && Marshal.GetLastWin32Error() != 0)
@@ -61,6 +62,7 @@ namespace WindowScatter
                     // but are cloaked by DWM - never actually on screen (#9).
                     if (IsCloaked(h))
                         return true;
+                    if (minimized && request == null && !CurrentVirtualDesktop.Contains(h)) return true;
 
                     int len = GetWindowTextLength(h);
                     if (len == 0) return true;
@@ -119,7 +121,17 @@ namespace WindowScatter
             if (!enumerationSucceeded)
                 throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error(), "Could not enumerate windows.");
 
-            var grouped = GroupByMonitor(windows, visibleMonitors, request, showMinimizedWindows);
+            var grouped = GroupByMonitor(windows, visibleMonitors, request, showMinimizedWindows, showMinimizedInOverview);
+            var applicationNames = new Dictionary<uint, string?>();
+            foreach (var window in grouped.Values.SelectMany(group => group))
+            {
+                uint process = window.Identity.ProcessId;
+                if (GetWindowThreadProcessId(window.Handle, out uint liveProcess) != window.Identity.ThreadId ||
+                    liveProcess != process) continue;
+                if (!applicationNames.TryGetValue(process, out string? name))
+                    applicationNames[process] = name = ApplicationIdentityReader.ReadApplicationName(process);
+                window.ApplicationName = name;
+            }
 
 #if ENUMERATION_DIAGNOSTICS
             diagnostics.Write(System.IO.Path.Combine(AppContext.BaseDirectory, WindowEnumerationDiagnostics.FileName),
@@ -131,14 +143,15 @@ namespace WindowScatter
         internal static Dictionary<IntPtr, List<WindowInfo>> GroupByMonitor(
             IEnumerable<(IntPtr Monitor, WindowInfo Window)> windows,
             IReadOnlyList<MonitorHelper.MonitorBounds> monitors, AppExposeRequest? request = null,
-            bool showMinimizedWindows = true)
+            bool showMinimizedWindows = true, bool showMinimizedInOverview = false)
         {
+            bool includeMinimized = request == null ? showMinimizedInOverview : showMinimizedWindows;
             var grouped = monitors.ToDictionary(m => m.Handle, _ => new List<WindowInfo>());
             foreach (var item in windows)
             {
                 if (grouped.TryGetValue(item.Monitor, out var group))
                 {
-                    if (item.Window.WasMinimized && (request == null || !showMinimizedWindows)) continue;
+                    if (item.Window.WasMinimized && !includeMinimized) continue;
                     if (request != null && !request.Includes(item.Window.Identity)) continue;
                     if (group.Count < MAX_WINDOWS) group.Add(item.Window);
                     else request?.RecordWindowOverLimit();

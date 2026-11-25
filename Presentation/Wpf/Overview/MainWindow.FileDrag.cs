@@ -159,6 +159,7 @@ public partial class MainWindow
     private void DismissFileDrag(WindowActivationTarget? target)
     {
         if (fileDrag == null || !session.TryBeginClose(target, isClosing || isTransitioning, out _)) return;
+        HideSearchForTransition();
         // The source still owns the button; skip the return animation and recheck before activation.
         if (target is { } eligible)
             windowActivation.CloseOverviewAndActivate(eligible, restore: false, wasMaximized: false,

@@ -97,7 +97,7 @@ namespace WindowScatter
         {
             appExposeRequest?.BeginEnumeration();
             return windowEnumerator.EnumerateByMonitor(monitors, appExposeRequest, showMinimizedWindows,
-                views.Select(v => v.monitor).ToArray());
+                views.Select(v => v.monitor).ToArray(), showMinimizedInOverview: showMinimizedWindows);
         }
 
         [DllImport("user32.dll", SetLastError = true)]

@@ -98,6 +98,18 @@ namespace WindowScatter
             return TryActivate(target, restore, wasMaximized, ownedForeground, stillValid);
         }
 
+        public bool CompleteSelectionReturn(WindowActivationTarget target, bool wasMaximized,
+            IReadOnlySet<IntPtr> surfaces, Action hide, Func<bool>? stillValid = null)
+        {
+            try
+            {
+                IntPtr active = foreground();
+                // Keep the final DWM frame over the old foreground until the activation attempt finishes.
+                return TryActivate(target, restore: true, wasMaximized, active != IntPtr.Zero && surfaces.Contains(active), stillValid);
+            }
+            finally { hide(); }
+        }
+
         private static (uint Thread, uint Process) IdentifyWindow(IntPtr handle)
         {
             if (!IsWindow(handle)) return default;

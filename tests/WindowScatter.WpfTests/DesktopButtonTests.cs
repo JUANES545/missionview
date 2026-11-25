@@ -216,17 +216,26 @@ public class DesktopButtonTests
         });
 
     [Fact]
-    public void SearchFieldHasAnAccessibleLabelAndNoResultsIsALiveRegion()
+    public void IdleSearchDoesNotExposeAHitTargetOrAnAutomationControl()
         => RunSta(() =>
         {
             var host = LoadWindow();
             try
             {
                 var field = (TextBox)host.FindName("SearchBox");
-                var name = UIElementAutomationPeer.CreatePeerForElement(field).GetName();
-                Assert.Equal("Search window titles", name);
-                Assert.Equal(name, ((TextBlock)host.FindName("SearchLabel")).Text);
-                var status = (TextBlock)host.FindName("NoSearchResults");
+                var panel = (StackPanel)host.FindName("SearchPanel");
+                var peer = UIElementAutomationPeer.CreatePeerForElement(field);
+                Assert.Equal(Visibility.Collapsed, panel.Visibility);
+                Assert.Equal(0, panel.Opacity);
+                Assert.False(field.IsHitTestVisible);
+                Assert.False(peer.IsControlElement());
+                Assert.True(peer.IsOffscreen());
+                panel.Visibility = Visibility.Visible;
+                panel.Opacity = 1;
+                panel.IsHitTestVisible = true;
+                Assert.True(field.IsHitTestVisible);
+                Assert.Equal("Search windows by title or application", peer.GetName());
+                var status = (TextBlock)host.FindName("SearchStatusText");
                 Assert.Equal(AutomationLiveSetting.Polite, AutomationProperties.GetLiveSetting(status));
                 Assert.Equal(Visibility.Collapsed, status.Visibility);
                 Assert.False(status.IsHitTestVisible);

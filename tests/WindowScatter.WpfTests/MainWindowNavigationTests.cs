@@ -14,6 +14,18 @@ using Xunit;
 
 public class MainWindowNavigationTests
 {
+    [Fact]
+    public void SearchMatchesApplicationNameOrTitleAndPreservesEnye()
+    {
+        var known = new WindowThumb { Title = "Draft 17", ApplicationName = "Diseño Café" };
+        var unknown = new WindowThumb { Title = "Draft 18" };
+        Assert.True(known.MatchesTitle(OverviewTitleSearch.Fold("diseño cafe")));
+        Assert.False(known.MatchesTitle(OverviewTitleSearch.Fold("diseno cafe")));
+        Assert.True(known.MatchesTitle(OverviewTitleSearch.Fold("draft 17")));
+        Assert.False(unknown.MatchesTitle(OverviewTitleSearch.Fold("cafe")));
+        Assert.True(unknown.MatchesTitle(OverviewTitleSearch.Fold("draft")));
+    }
+
     [Theory]
     [InlineData(1, true)]
     [InlineData(2, true)]
@@ -91,6 +103,65 @@ public class MainWindowNavigationTests
     });
 
     [Fact]
+    public void SearchAppearsOnFirstEditOnlyAfterOpeningAndHidesBeforeReturnOnEveryView()
+        => RunSta(() =>
+        {
+            using var app = new MainWindow();
+            var other = app.AddView(-1600, 0, 1600, 900, 1.25);
+            app.BeginSearchOpening();
+            app.UseSearchInput();
+            Assert.Equal(Visibility.Collapsed, app.SearchVisibility);
+            Assert.Equal(Visibility.Collapsed, other.SearchVisibility);
+
+            other.StartFixtureOpeningAnimation();
+            app.EndSearchOpening();
+            app.UseSearchInput();
+            Assert.Equal(Visibility.Collapsed, app.SearchVisibility);
+            other.SettleFixtureOpeningAnimation();
+
+            app.UseSearchInput();
+            Assert.Equal(Visibility.Visible, app.SearchVisibility);
+            Assert.False(app.SearchShown);
+            app.TypeSearch("q");
+            Assert.Equal("q", app.Query);
+            Assert.True(app.SearchShown);
+            Assert.Equal("No matching windows", app.SearchFeedback);
+            Assert.Equal(Visibility.Collapsed, other.SearchVisibility);
+
+            other.UseSearchInput();
+            Assert.Equal(Visibility.Collapsed, app.SearchVisibility);
+            Assert.True(other.SearchShown);
+            Assert.Equal("q", other.Query);
+            other.TypeSearch("");
+            Assert.False(other.SearchShown);
+            Assert.Equal("", other.SearchFeedback);
+
+            other.TypeSearch("a");
+            app.BeginSearchExit();
+            Assert.Equal(Visibility.Collapsed, app.SearchVisibility);
+            Assert.Equal(Visibility.Collapsed, other.SearchVisibility);
+            other.UseSearchInput();
+            Assert.False(other.SearchShown);
+        });
+
+    [Theory]
+    [InlineData(1920, 1080, 1, 0)]
+    [InlineData(3440, 1440, 1.25, -3440)]
+    [InlineData(5120, 1440, 2, 1920)]
+    [InlineData(1024, 768, 1.5, 0)]
+    [InlineData(720, 1280, 2, -720)]
+    public void SearchIsCenteredAndCappedInLocalDips(int width, int height, double dpi, int x)
+        => RunSta(() =>
+        {
+            using var app = new MainWindow(left: x, width: width, height: height, dpi: dpi);
+            var (left, fieldWidth) = app.LayoutFixtureSearch();
+            double dipWidth = width / dpi;
+            Assert.Equal(dipWidth / 2, left + fieldWidth / 2, 8);
+            Assert.Equal(Math.Min(520, dipWidth - 24), fieldWidth, 8);
+            Assert.True(left >= 12);
+        });
+
+    [Fact]
     public void SyntheticSearchSkipsHiddenShelfSlotsWithoutRepackingAndRestoresTabOrder()
         => RunSta(() =>
         {
@@ -102,6 +173,7 @@ public class MainWindowNavigationTests
 
             var matches = strip.NavigationTargets(visibleOnly: false);
             Assert.Equal(original.Take(10).ToArray(), matches.ToArray());
+            Assert.Equal("10 matching windows", app.SearchFeedback);
             Assert.Equal(new IntPtr(10), app.Selected);
             app.Tab(-1);
             Assert.Equal(new IntPtr(19), app.Selected);
@@ -159,6 +231,7 @@ public class MainWindowNavigationTests
 
             Assert.Empty(app.Errors);
             Assert.Equal("cafe", app.Query);
+            Assert.Equal("2 matching windows", app.SearchFeedback);
             Assert.Equal(normal[1].WindowHandle, app.Selected);
             Assert.Equal(Visibility.Hidden, normal[0].ClickBorder.Visibility);
             Assert.Equal(slots, normal.Select(t => (t.ThumbnailHandle, t.TargetX, t.TargetY,
@@ -183,6 +256,7 @@ public class MainWindowNavigationTests
             Assert.Equal(2, shelf.GetChildren().Count);
 
             app.TypeSearch("window 11");
+            Assert.Equal("1 matching window", app.SearchFeedback);
             Assert.Empty(list.GetChildren());
             Assert.Equal("Window 11, minimized", Assert.Single(shelf.GetChildren()).GetName());
             Assert.Equal(new IntPtr(11), app.Selected);
@@ -246,7 +320,7 @@ public class MainWindowNavigationTests
     [InlineData(false, true)]
     [InlineData(true, false)]
     [InlineData(true, true)]
-    public void ActualRebuildPreservesNormalOnlyOverviewAndOnlyShowsAppExposeShelfWhenEnabled(
+    public void ActualRebuildShowsTheMinimizedShelfOnlyWhenEnabledInEitherMode(
         bool appExpose, bool showMinimized) => RunSta(() =>
     {
         using var app = new MainWindow();
@@ -258,7 +332,7 @@ public class MainWindowNavigationTests
         };
         var minimized = app.MinimizedInfo("Minimized window");
         if (appExpose) app.UseAppExpose(normal.Identity);
-        bool shelfExpected = appExpose && showMinimized;
+        bool shelfExpected = showMinimized;
         app.Rebuild(showMinimized, normal, minimized);
         Assert.Equal(shelfExpected, app.Strip != null);
         Assert.Equal(shelfExpected ? 2 : 1, app.DisplayedWindowCount);
@@ -301,7 +375,8 @@ public class MainWindowNavigationTests
             new() { Handle = new(1), Left = -1920, Top = -240, Width = 1920, Height = 1080, DpiScale = 1.5 },
             new() { Handle = new(2), Width = 2560, Height = 1440, DpiScale = 2 }
         };
-        var settings = new AppSettings { OverviewMonitorScope = scope, ShowMinimizedWindows = false };
+        var settings = new AppSettings { OverviewMonitorScope = scope, ShowMinimizedWindows = false,
+            ShowMinimizedWindowsInOverview = false };
         app.OpenDisplays(topology, settings, new(pointer));
         var before = app.Snapshot();
         Assert.Equal(scope == "All" ? 2 : 1, before.Count);
@@ -315,6 +390,7 @@ public class MainWindowNavigationTests
         });
         settings.OverviewMonitorScope = scope == "All" ? "Current" : "All";
         settings.ShowMinimizedWindows = true;
+        settings.ShowMinimizedWindowsInOverview = true;
         Assert.Equal(before.Select(d => d.Display), app.Snapshot().Select(d => d.Display));
         Assert.False(app.SessionShowsMinimized);
         var selected = app.AddThumb(10, 100, 100, 300, 200);
@@ -373,6 +449,28 @@ public class MainWindowNavigationTests
         Assert.NotSame(oldStrip, app.Strip);
         Assert.Equal(minimized.Handle, app.Selected);
         Assert.Equal(0, app.ActivationRequests);
+    });
+
+    [Fact]
+    public void GeneralOverviewShelfOnlyRestoresAnExplicitlySelectedMinimizedWindow() => RunSta(() =>
+    {
+        using var app = new MainWindow();
+        var minimized = app.MinimizedInfo("Quarterly report");
+        app.Rebuild(false, minimized);
+        Assert.Null(app.Strip);
+        app.Rebuild(true, minimized);
+        Assert.NotNull(app.Strip);
+        Assert.Equal(Visibility.Hidden, app.EmptyState.Visibility);
+        Assert.Equal(IntPtr.Zero, app.Selected);
+        app.TypeSearch("quarterly");
+        Assert.Equal(minimized.Handle, app.Selected);
+        Assert.Equal(0, app.ActivationRequests);
+        var peer = UIElementAutomationPeer.CreatePeerForElement(app.Strip!);
+        var entry = Assert.Single(peer.GetChildren());
+        Assert.IsAssignableFrom<IInvokeProvider>(entry.GetPattern(PatternInterface.Invoke)).Invoke();
+        Dispatcher.CurrentDispatcher.Invoke(() => { }, DispatcherPriority.Background);
+        Assert.Equal(minimized.Handle, app.Clicked);
+        Assert.Equal(1, app.ActivationRequests);
     });
 
     [Fact]
@@ -783,12 +881,13 @@ namespace WindowScatter
         private AppSettings settings = new();
         private readonly TextBlock MoveStatus = new();
         private readonly TextBox SearchBox = new();
-        private readonly TextBlock NoSearchResults = new() { Visibility = Visibility.Collapsed };
+        private readonly StackPanel SearchPanel = new() { Visibility = Visibility.Collapsed, IsHitTestVisible = false };
+        private readonly TextBlock SearchStatusText = new() { Visibility = Visibility.Collapsed };
         private readonly Window chromeWindow = new() { ShowActivated = false };
         private AppExposeRequest? appExposeRequest;
         private string IdleMoveStatus => "";
-        private bool isScatterActive => false;
-        private bool isTransitioning => !scatterInteraction.IsOpen;
+        private bool isScatterActive => session.Opening;
+        private bool isTransitioning => session.Transitioning || !scatterInteraction.IsOpen;
         private bool isClosing => false;
         private bool movingWindow => false;
         private bool AnyAnimating => views.Any(v => v.animationManager.IsAnimating);
@@ -815,7 +914,10 @@ namespace WindowScatter
         internal int DisplayedWindowCount => enumeratedWindowCount;
         internal string Query => SearchBox.Text;
         internal bool SessionOpen => scatterInteraction.IsOpen;
-        internal Visibility SearchStatus => NoSearchResults.Visibility;
+        internal Visibility SearchStatus => SearchStatusText.Visibility;
+        internal Visibility SearchVisibility => SearchPanel.Visibility;
+        internal bool SearchShown => SearchPanel.IsHitTestVisible && SearchPanel.Opacity == 1;
+        internal string SearchFeedback => SearchStatusText.Text;
         internal IntPtr CurrentDisplay => monitor.Handle;
         internal IReadOnlyList<MonitorHelper.MonitorBounds> Topology => monitors;
         internal bool SessionShowsMinimized => showMinimizedWindows;
@@ -920,6 +1022,28 @@ namespace WindowScatter
         internal void Pick(IntPtr handle) => SelectWindow(handle);
         internal void Tab(int direction) => SelectNextWindow(direction);
         internal void TypeSearch(string query) => SearchBox.Text = query;
+        internal void UseSearchInput()
+        {
+            if (CanUseSearch) SetSearchInputView();
+        }
+        internal void BeginSearchOpening()
+        {
+            session.Opening = true;
+            HideSearchForTransition();
+        }
+        internal void EndSearchOpening() => session.Opening = false;
+        internal void StartFixtureOpeningAnimation() => animationManager.StartScatterAnimation();
+        internal void SettleFixtureOpeningAnimation() => animationManager.StopAllAnimations();
+        internal void BeginSearchExit()
+        {
+            Assert.True(session.TryBeginClose(null, false, out _));
+            HideSearchForTransition();
+        }
+        internal (double Left, double Width) LayoutFixtureSearch()
+        {
+            LayoutSearchPanel(monitor.Width / currentDpiScale, monitor.Height / currentDpiScale);
+            return (Canvas.GetLeft(SearchPanel), SearchPanel.Width);
+        }
         internal void Arrow(int dx, int dy) => SelectWindowInDirection(dx, dy);
         internal IReadOnlyList<OverviewDisplaySnapshot> Snapshot() => NavigationSnapshot();
         internal void Rebuild(bool showMinimized, params WindowInfo[] windows)

@@ -35,7 +35,7 @@ public partial class MainWindow
         try
         {
             coordinator.windowClose.Request(thumb.Identity);
-            if (thumb.CloseButton?.IsKeyboardFocused == true) SearchBox.Focus();
+            if (thumb.CloseButton?.IsKeyboardFocused == true) FocusOverviewInput();
             if (thumb.CloseButton != null) thumb.CloseButton.IsEnabled = false;
             coordinator.SetCloseStatus(PendingCloseStatus);
             coordinator.closeObservationTimer ??= CreateCloseObservationTimer();
@@ -128,6 +128,7 @@ public partial class MainWindow
         bool maximized = AllThumbs().Any(t => t.Identity == target && t.WasMaximized);
         if (!scatterInteraction.TryBeginClose(target, out _)) return;
         isTransitioning = true;
+        HideSearchForTransition();
         moveCancellation?.Cancel();
         CloseMoveMenus();
         CancelDrag();

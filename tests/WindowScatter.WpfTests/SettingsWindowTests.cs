@@ -13,7 +13,7 @@ public sealed class SettingsWindowTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public void ShortcutPreviewFollowsTheRecorderWithoutApplyingOrHidingSaveFailure(bool appExpose)
+    public void CompletingRecordingAppliesOnceAndRestoresThePreviousBindingOnFailure(bool appExpose)
         => RunSta(() =>
         {
             var source = new AppSettings { Hotkey = "Win+F12" };
@@ -27,18 +27,9 @@ public sealed class SettingsWindowTests
                 Assert.Equal("Uses this shortcut for MissionView while it is running.", Assert.Single(generic).Text);
                 recorder.RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
                 Assert.DoesNotContain(Descendants(window).OfType<TextBlock>(), t => Equals(t.Tag, "ShortcutPreview") && t.Visibility == Visibility.Visible);
-                window.RecordVirtualKey('W', 8, true);
-                var preview = Assert.Single(Descendants(window).OfType<TextBlock>(), t => Equals(t.Tag, "ShortcutPreview") && t.Visibility == Visibility.Visible);
-                Assert.Equal(appExpose
-                    ? "Opens App Expose instead of Widgets while MissionView is running."
-                    : "Opens MissionView instead of Widgets while MissionView is running.", preview.Text);
-                Assert.Same(recorder.Parent, preview.Parent);
-                Assert.Equal(AutomationLiveSetting.Polite, AutomationProperties.GetLiveSetting(preview));
-                Assert.Null(recorder.ToolTip);
-                Assert.Equal("Win+F12", source.Hotkey);
-                Assert.Null(source.AppExposeHotkey);
+                window.RecordVirtualKey(0x5B, 8, true);
                 Assert.Null(attempted);
-                Button(window, "Save").RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+                window.RecordVirtualKey('W', 8, true);
                 Assert.NotNull(attempted);
                 Assert.Equal("Win+W", appExpose ? attempted.AppExposeHotkey : attempted.Hotkey);
                 Assert.Equal("Win+F12", source.Hotkey);
@@ -46,7 +37,6 @@ public sealed class SettingsWindowTests
                 Assert.Contains(Descendants(window).OfType<TextBlock>(), t => t.Text.StartsWith("Settings were not applied."));
                 Assert.Equal("Uses this shortcut for MissionView while it is running.",
                     Assert.Single(Descendants(window).OfType<TextBlock>(), t => Equals(t.Tag, "ShortcutPreview") && t.Visibility == Visibility.Visible).Text);
-                Button(window, "Cancel").RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
                 Assert.Equal("Win+F12", source.Hotkey);
             }
             finally { window.Close(); }
@@ -72,7 +62,7 @@ public sealed class SettingsWindowTests
                 Assert.Equal("Win+F12", Button(window, "Win+F12").Content);
                 Assert.False(controls.OfType<ComboBox>().Single(c => AutomationProperties.GetName(c) == "Corner").IsEnabled);
                 TextBox(window, "Delay (milliseconds)").Text = "250";
-                Button(window, "Save").RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+                window.CommitDelay();
                 Assert.NotNull(saved);
                 Assert.Equal(0.63, saved.AnimationSpeed);
                 Assert.Equal(250, saved.HotCornerDelay);
@@ -91,7 +81,7 @@ public sealed class SettingsWindowTests
         {
             var source = new AppSettings { AppExposeHotkey = "Ctrl+F24" };
             AppSettings? saved = null;
-            var window = new SettingsWindow(source, value => { saved = value; return true; }, new TextBlock(), () => true);
+            var window = new SettingsWindow(source, value => { saved = value; source.CopyFrom(value); return true; }, new TextBlock(), () => true);
             try
             {
                 Assert.Equal("Win+W", Button(window, "Win+W").Content);
@@ -101,9 +91,7 @@ public sealed class SettingsWindowTests
                 Assert.Contains(Descendants(window).OfType<TextBlock>(), text =>
                     text.Visibility == Visibility.Visible &&
                     text.Text == "Replaces the Windows switcher (left Alt+Tab) while MissionView is running.");
-                Assert.Null(saved);
-                Assert.Equal("Win+W", source.Hotkey);
-                Button(window, "Save").RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+                Assert.Equal("Alt+Tab", source.Hotkey);
                 Assert.NotNull(saved);
                 Assert.Equal("Alt+Tab", saved.Hotkey);
                 Assert.Equal("Ctrl+F24", saved.AppExposeHotkey);
@@ -112,7 +100,7 @@ public sealed class SettingsWindowTests
         });
 
     [Fact]
-    public void PresentationPreferencesSaveReopenAndCancelWithoutChangingTheSourceUntilSave()
+    public void PresentationPreferencesApplyAndReopenWithoutGlobalSaveOrCancel()
         => RunSta(() =>
         {
             var source = new AppSettings();
@@ -146,14 +134,16 @@ public sealed class SettingsWindowTests
                 Combo(window, "Overview displays").SelectedIndex = 1;
                 Combo(window, "Thumbnail size").SelectedIndex = 2;
                 Check(window, "Show minimized windows in App Exposé").IsChecked = false;
+                Assert.True(Check(window, "Show minimized windows in Overview").IsChecked);
+                Check(window, "Show minimized windows in Overview").IsChecked = false;
                 Check(window, "Reduce animations").IsChecked = true;
-                Assert.Equal("White", source.SelectionBorderColor);
-                Button(window, "Save").RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+                Assert.DoesNotContain(Descendants(window).OfType<Button>(), b => b.Content is "Save" or "Cancel");
                 Assert.Equal("Blue", saved!.SelectionBorderColor);
                 Assert.Equal("Current", saved.OverviewMonitorScope);
                 Assert.Equal("Large", saved.ThumbnailSize);
                 Assert.Equal(80, saved.BackgroundDimming);
                 Assert.False(saved.ShowMinimizedWindows);
+                Assert.False(saved.ShowMinimizedWindowsInOverview);
                 Assert.True(saved.ReduceAnimations);
             }
             finally { window.Close(); }
@@ -164,21 +154,18 @@ public sealed class SettingsWindowTests
                 Assert.Equal("Current", ((ComboBoxItem)Combo(reopened, "Overview displays").SelectedItem).Tag);
                 Assert.Equal("Large", ((ComboBoxItem)Combo(reopened, "Thumbnail size").SelectedItem).Tag);
                 Assert.Equal(80, Descendants(reopened).OfType<Slider>().Single().Value);
-                Combo(reopened, "Selection border").SelectedIndex = 2;
-                Button(reopened, "Cancel").RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
                 Assert.Equal("Blue", source.SelectionBorderColor);
             }
             finally { reopened.Close(); }
         });
 
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public void ResetRequiresConfirmationAndOnlyAppliesDefaultsOnSave(bool save)
+    [Fact]
+    public void ResetAppliesDefaultsOnlyAfterConfirmation()
         => RunSta(() =>
         {
             var source = new AppSettings { SelectionBorderColor = "Mint", OverviewMonitorScope = "Current",
                 ThumbnailSize = "Large", BackgroundDimming = 80, ReduceAnimations = true, ShowMinimizedWindows = false,
+                ShowMinimizedWindowsInOverview = false,
                 RunOnStartup = true, Hotkey = "Ctrl+F12", Renderer = "legacy", AnimationSpeed = .63 };
             string before = System.Text.Json.JsonSerializer.Serialize(source);
             bool confirm = false;
@@ -190,6 +177,7 @@ public sealed class SettingsWindowTests
                 var reset = Button(window, "Reset settings");
                 reset.RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
                 Assert.Equal("Mint", ((ComboBoxItem)Combo(window, "Selection border").SelectedItem).Tag);
+                Assert.Equal(before, System.Text.Json.JsonSerializer.Serialize(source));
                 confirm = true;
                 Button(window, "Ctrl+F12").RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
                 Assert.True(window.IsRecordingShortcut);
@@ -201,10 +189,9 @@ public sealed class SettingsWindowTests
                 Assert.False(Check(window, "Start with Windows").IsChecked);
                 Assert.False(Check(window, "Reduce animations").IsChecked);
                 Assert.True(Check(window, "Show minimized windows in App Exposé").IsChecked);
-                Assert.Equal(before, System.Text.Json.JsonSerializer.Serialize(source));
-                Button(window, save ? "Save" : "Cancel").RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
-                Assert.Equal(save ? 1 : 0, calls);
-                Assert.Equal(save ? System.Text.Json.JsonSerializer.Serialize(new AppSettings()) : before,
+                Assert.True(Check(window, "Show minimized windows in Overview").IsChecked);
+                Assert.Equal(1, calls);
+                Assert.Equal(System.Text.Json.JsonSerializer.Serialize(new AppSettings()),
                     System.Text.Json.JsonSerializer.Serialize(source));
             }
             finally { window.Close(); }
@@ -224,7 +211,7 @@ public sealed class SettingsWindowTests
             try
             {
                 TextBox(window, "Delay (milliseconds)").Text = delay;
-                Button(window, "Save").RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+                window.CommitDelay();
                 Assert.Equal(0, calls);
                 Assert.False(closed);
                 Assert.Contains(Descendants(window).OfType<TextBlock>(), text => text.Text.StartsWith("Enter "));
@@ -247,17 +234,16 @@ public sealed class SettingsWindowTests
                 Combo(window, "Selection border").SelectedIndex = 1;
                 Combo(window, "Thumbnail size").SelectedIndex = 2;
                 Descendants(window).OfType<Slider>().Single().Value = 90;
-                Button(window, "Save").RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
-                Assert.Equal(1, calls);
+                Assert.Equal(3, calls);
                 Assert.False(closed);
                 Assert.Equal("Win+Shift+F12", source.Hotkey);
                 Assert.Equal(source.HotCornerDelay.ToString(), TextBox(window, "Delay (milliseconds)").Text);
                 Assert.Equal("White", ((ComboBoxItem)Combo(window, "Selection border").SelectedItem).Tag);
                 Assert.Equal("Standard", ((ComboBoxItem)Combo(window, "Thumbnail size").SelectedItem).Tag);
                 Assert.Equal(source.BackgroundDimming, Descendants(window).OfType<Slider>().Single().Value);
-                Button(window, "Cancel").RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+                window.Close();
                 Assert.True(closed);
-                Assert.Equal(1, calls);
+                Assert.Equal(3, calls);
             }
             finally { window.Close(); }
         });
@@ -267,8 +253,9 @@ public sealed class SettingsWindowTests
         => RunSta(() =>
         {
             AppSettings? saved = null;
-            var window = new SettingsWindow(new AppSettings { Hotkey = "Win+F12" },
-                value => { saved = value; return true; }, new TextBlock(), () => true);
+            var source = new AppSettings { Hotkey = "Win+F12" };
+            var window = new SettingsWindow(source,
+                value => { saved = value; source.CopyFrom(value); return true; }, new TextBlock(), () => true);
             try
             {
                 var button = Button(window, "Win+F12");
@@ -285,10 +272,9 @@ public sealed class SettingsWindowTests
                 Assert.False(window.IsRecordingShortcut);
                 Assert.Equal("Ctrl+Alt+F9", button.Content);
                 var hint = Descendants(window).OfType<TextBlock>().Single(text => AutomationProperties.GetAutomationId(text) == "App Exposé availability");
-                Assert.Contains("Save", hint.Text);
+                Assert.Equal("Follows Overview", hint.Text);
                 Assert.Equal("Ctrl+Alt+Shift+F9", Descendants(window).OfType<Button>()
                     .Single(b => AutomationProperties.GetAutomationId(b) == "App Exposé shortcut").Content);
-                Button(window, "Save").RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
                 Assert.Equal("Ctrl+Alt+F9", saved?.Hotkey);
             }
             finally { window.Close(); }
@@ -298,7 +284,9 @@ public sealed class SettingsWindowTests
     public void RecorderCanRetainLegacyShiftShortcutWithoutReinterpretingIt()
         => RunSta(() =>
         {
-            var window = new SettingsWindow(new AppSettings { Hotkey = "Win+Shift+F12" }, _ => true, new TextBlock(), () => false);
+            var source = new AppSettings { Hotkey = "Win+Shift+F12" };
+            var window = new SettingsWindow(source, value => { source.CopyFrom(value); return true; }, new TextBlock(),
+                () => source.Hotkey != "Win+Shift+F12");
             try
             {
                 var button = Button(window, "Win+Shift+F12");
@@ -324,7 +312,8 @@ public sealed class SettingsWindowTests
         int virtualKey, string chord, string derivedChord)
         => RunSta(() =>
         {
-            var window = new SettingsWindow(new AppSettings { Hotkey = "Win+F12" }, _ => true, new TextBlock(), () => true);
+            var source = new AppSettings { Hotkey = "Win+F12" };
+            var window = new SettingsWindow(source, value => { source.CopyFrom(value); return true; }, new TextBlock(), () => true);
             try
             {
                 var button = Button(window, "Win+F12");
@@ -358,7 +347,8 @@ public sealed class SettingsWindowTests
         => RunSta(() =>
         {
             var source = new AppSettings { RunOnStartup = false };
-            var window = new SettingsWindow(source, _ => true, new TextBlock(), () => true);
+            var window = new SettingsWindow(source, _ => throw new InvalidOperationException("Refresh must not write settings."),
+                new TextBlock(), () => true);
             try
             {
                 TextBox(window, "Delay (milliseconds)").Text = "725";
@@ -371,7 +361,7 @@ public sealed class SettingsWindowTests
         });
 
     [Fact]
-    public void HintUsesActualReservationAndKeepsNewShortcutPendingUntilSaved()
+    public void HintUsesActualReservationAfterRecording()
         => RunSta(() =>
         {
             bool allowReservation = false;
@@ -390,13 +380,11 @@ public sealed class SettingsWindowTests
                 var hint = Descendants(window).OfType<TextBlock>().Single(text => AutomationProperties.GetAutomationId(text) == "App Exposé availability");
                 Assert.Contains("unavailable", hint.Text);
                 Assert.Contains("reserve", hint.Text);
+                allowReservation = true;
                 Button(window, "Win+W").RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
                 window.RecordShortcut(Key.F9, ModifierKeys.Control | ModifierKeys.Alt);
                 Assert.Contains("Follows Overview", hint.Text);
-                Assert.Contains("Save", hint.Text);
                 Assert.DoesNotContain("hold Shift", hint.Text);
-                allowReservation = true;
-                Button(window, "Save").RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
                 Assert.NotNull(hotkeys.AppExpose);
                 Assert.Equal("Follows Overview", hint.Text);
                 Assert.Equal("Ctrl+Alt+Shift+F9", Descendants(window).OfType<Button>()
@@ -424,7 +412,7 @@ public sealed class SettingsWindowTests
             try
             {
                 TextBox(window, "Delay (milliseconds)").Text = "725";
-                Button(window, "Save").RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+                window.CommitDelay();
                 Assert.Equal(1, calls);
                 Assert.Equal(725, source.HotCornerDelay);
                 Assert.False(closed);

@@ -12,18 +12,20 @@ namespace WindowScatter
         {
             if (string.IsNullOrWhiteSpace(executablePath))
                 throw new InvalidOperationException("The application's executable identity is unavailable.");
-            string executable = executablePath.Replace('/', '\\').Split('\\')[^1];
-            bool sharedHost = executable.ToLowerInvariant() is
-                "applicationframehost.exe" or "wwahost.exe" or "dllhost.exe" or "rundll32.exe" or
-                "runtimebroker.exe" or "svchost.exe" or "msedgewebview2.exe" or "electron.exe" or
-                "java.exe" or "javaw.exe" or "python.exe" or "pythonw.exe" or "dotnet.exe" or
-                "wscript.exe" or "cscript.exe" or "mshta.exe" or "powershell.exe" or "pwsh.exe";
+            bool sharedHost = IsSharedHost(executablePath);
             string? appId = string.IsNullOrWhiteSpace(windowAppId) ? null : windowAppId;
             if (sharedHost && appId == null)
                 throw new InvalidOperationException("This shared application host does not expose a per-window application identity.");
             appId ??= string.IsNullOrWhiteSpace(processAppId) ? null : processAppId;
             return new(executablePath, appId);
         }
+
+        internal static bool IsSharedHost(string executablePath) =>
+            executablePath.Replace('/', '\\').Split('\\')[^1].ToLowerInvariant() is
+                "applicationframehost.exe" or "wwahost.exe" or "dllhost.exe" or "rundll32.exe" or
+                "runtimebroker.exe" or "svchost.exe" or "msedgewebview2.exe" or "electron.exe" or
+                "java.exe" or "javaw.exe" or "python.exe" or "pythonw.exe" or "dotnet.exe" or
+                "wscript.exe" or "cscript.exe" or "mshta.exe" or "powershell.exe" or "pwsh.exe";
     }
 
     internal sealed class AppExposeRequest
