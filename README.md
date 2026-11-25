@@ -60,6 +60,8 @@ Start dragging a disposable test file in Explorer with the left mouse button and
 
 MissionView checks only for the file-drop format and never accepts the drop. Press `Escape` to cancel. If you release before switching, press the shortcut again to close the overview without switching. App Exposé and swapped mouse buttons are outside this prototype. Windows must deliver the shortcut and drag events during the Explorer drag and allow the target to take focus; the target app decides whether it accepts the file.
 
+For a supported overview shortcut that includes `Win`, MissionView masks the Windows menu on the two shortcut presses during the drag. This does not make reserved shortcuts such as `Win+L` available.
+
 ## Make it yours
 
 Right-click the tray icon to open **Settings**. Select an info button for inline help. Choose startup, shortcuts, hot corners, thumbnail size, background dimming and a White, Blue or Mint selection border (White by default). Show the overview on all displays or only the display under the pointer; moving between displays requires all displays. Hide minimized windows from App Exposé or reduce animations. **Reset settings** loads defaults for review; **Save** applies changes and **Cancel** discards them. Check for updates from Settings or the tray; MissionView asks before starting the installer.
