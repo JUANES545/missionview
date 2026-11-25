@@ -230,7 +230,9 @@ namespace WindowScatter
         internal const int WM_SYSKEYUP = 0x0105;
         internal const uint KEYEVENTF_KEYUP = 0x0002;
 
+        internal const int VK_LBUTTON = 0x01;
         internal const int VK_TAB = 0x09;
+        internal const int VK_ESCAPE = 0x1B;
         internal const int VK_SHIFT = ModifierKeyCodes.VK_SHIFT;
         internal const int VK_CONTROL = ModifierKeyCodes.VK_CONTROL;
         internal const int VK_MENU = ModifierKeyCodes.VK_MENU;
@@ -298,6 +300,9 @@ namespace WindowScatter
 
         [DllImport("user32.dll", SetLastError = true)]
         public static extern bool GetCursorPos(out POINT lpPoint);
+
+        [DllImport("user32.dll")]
+        internal static extern short GetAsyncKeyState(int virtualKey);
 
         [DllImport("user32.dll")]
         public static extern IntPtr MonitorFromPoint(POINT pt, uint dwFlags);

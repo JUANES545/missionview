@@ -35,6 +35,8 @@
     <Compile Include="../../Presentation/Wpf/Overview/OverviewMoveShortcut.cs" Link="OverviewMoveShortcut.cs" />
     <Compile Include="../../Infrastructure/Windows/DesktopToggle.cs" Link="DesktopToggle.cs" />
     <Compile Include="../../Infrastructure/Windows/WindowActivation.cs" Link="WindowActivation.cs" />
+    <Compile Include="../../Infrastructure/Windows/WindowClose.cs" Link="WindowClose.cs" />
+    <Compile Include="../../Infrastructure/Windows/CurrentVirtualDesktop.cs" Link="CurrentVirtualDesktop.cs" />
     <Compile Include="../../Infrastructure/Windows/WindowStacking.cs" Link="WindowStacking.cs" />
     <Compile Include="../../Presentation/Wpf/Overview/MinimizedWindowStrip.cs" Link="MinimizedWindowStrip.cs" />
     <Compile Include="../../Infrastructure/Windows/ApplicationIdentityReader.cs" Link="ApplicationIdentityReader.cs" />
@@ -45,6 +47,7 @@
     <Compile Include="../../Presentation/Wpf/Overview/MainWindow.DisplayOptions.cs" Link="MainWindow.DisplayOptions.cs" />
     <Compile Include="../../Presentation/Wpf/Rendering/WindowSwitcher.cs" Link="WindowSwitcher.cs" />
     <Compile Include="../../Presentation/Wpf/Overview/MainWindow.Drag.cs" Link="MainWindow.Drag.cs" />
+    <Compile Include="../../Presentation/Wpf/Overview/MainWindow.FileDrag.cs" Link="MainWindow.FileDrag.cs" />
     <Compile Include="../../Infrastructure/Windows/DwmDragPreview.cs" Link="DwmDragPreview.cs" />
     <Compile Include="../../Infrastructure/Windows/MonitorHelper.cs" Link="MonitorHelper.cs" />
   </ItemGroup>

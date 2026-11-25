@@ -74,6 +74,7 @@ namespace WindowScatter
                 if (!view.chromeClosed) view.chromeWindow.Hide();
                 view.Hide();
             }
+            ResetFileDrag();
         }
 
         private void CleanupView()
@@ -139,6 +140,7 @@ namespace WindowScatter
             ConfigureCloseInput(thumb);
             border.MouseLeftButtonDown += (_, e) =>
             {
+                if (BlocksThumbnailInput) { e.Handled = true; return; }
                 if (e.OriginalSource is DependencyObject source && OverviewCloseInput.IsCloseSource(source, thumb.CloseButton)) return;
                 if (thumb.IsFiltered || !scatterInteraction.IsOpen || AnyAnimating || isScatterActive ||
                     isTransitioning || coordinator.movingWindow) return;
