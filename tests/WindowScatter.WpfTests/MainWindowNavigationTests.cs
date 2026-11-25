@@ -320,7 +320,7 @@ public class MainWindowNavigationTests
     [InlineData(false, true)]
     [InlineData(true, false)]
     [InlineData(true, true)]
-    public void ActualRebuildPreservesNormalOnlyOverviewAndOnlyShowsAppExposeShelfWhenEnabled(
+    public void ActualRebuildShowsTheMinimizedShelfOnlyWhenEnabledInEitherMode(
         bool appExpose, bool showMinimized) => RunSta(() =>
     {
         using var app = new MainWindow();
@@ -332,7 +332,7 @@ public class MainWindowNavigationTests
         };
         var minimized = app.MinimizedInfo("Minimized window");
         if (appExpose) app.UseAppExpose(normal.Identity);
-        bool shelfExpected = appExpose && showMinimized;
+        bool shelfExpected = showMinimized;
         app.Rebuild(showMinimized, normal, minimized);
         Assert.Equal(shelfExpected, app.Strip != null);
         Assert.Equal(shelfExpected ? 2 : 1, app.DisplayedWindowCount);
