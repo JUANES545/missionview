@@ -6,6 +6,9 @@ namespace WindowScatter
     internal static class KeyboardMenuMask
     {
         internal delegate uint SendInputEvents(uint count, INPUT[] inputs, int size);
+        internal static bool IsDragShortcut(OverviewShortcutEvent input, OverviewHotkey? normal) =>
+            input.Suppress && input.Activate && !input.AppExpose && input.MaskMenus &&
+            (input.Modifiers & OverviewHotkey.Win) != 0 && normal?.Modifiers == input.Modifiers;
 
         public static bool TrySend(SendInputEvents send)
         {

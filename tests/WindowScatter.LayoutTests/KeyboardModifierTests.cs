@@ -84,6 +84,61 @@ public class KeyboardModifierTests
         Assert.Equal(sent == 1 ? 2 : 1, calls);
     }
 
+    public static IEnumerable<object[]> WinOverviewShortcuts =>
+        Enumerable.Range('A', 26).Select(key => new object[] { $"Win+{(char)key}", key })
+            .Concat(new object[][] { ["Win+F12", 0x7B], ["Win+1", (int)'1'],
+                ["Win+Ctrl+Left", 0x25], ["Win+Alt+PageDown", 0x22], ["Win+Shift+Space", 0x20] });
+
+    [Theory]
+    [MemberData(nameof(WinOverviewShortcuts))]
+    public void FileDragMasksOnlyTheRecognizedWinOverviewPress(string chord, int key)
+    {
+        var hotkeys = new OverviewHotkeys((_, _) => false, _ => true, () => true);
+        if (chord == "Win+L")
+        {
+            Assert.False(hotkeys.TryInitialize(chord, out var reserved));
+            Assert.Contains("system security", reserved);
+            Assert.Null(hotkeys.Normal);
+        }
+        else Assert.True(hotkeys.TryInitialize(chord, out var error), error);
+
+        var interaction = new ScatterInteraction();
+        var source = new OverviewShortcutInput(interaction, () => default, () => default);
+        Assert.False(KeyboardMenuMask.IsDragShortcut(source.Process(VK_LWIN, true, false, hotkeys), hotkeys.Normal));
+
+        var binding = hotkeys.Normal;
+        foreach (var (modifier, virtualKey) in new[] { (1, VK_LCONTROL), (2, VK_LMENU), (4, VK_LSHIFT) })
+            if ((binding?.Modifiers & modifier) == modifier) source.Process(virtualKey, true, false, hotkeys);
+
+        Assert.False(KeyboardMenuMask.IsDragShortcut(source.Process(key, true, false, hotkeys, injected: true), binding));
+        var open = source.Process(key, true, false, hotkeys);
+        Assert.Equal(binding.HasValue, KeyboardMenuMask.IsDragShortcut(open, binding));
+        Assert.False(KeyboardMenuMask.IsDragShortcut(source.Process(key, true, false, hotkeys), binding));
+        Assert.False(KeyboardMenuMask.IsDragShortcut(source.Process(key, false, false, hotkeys), binding));
+        interaction.BeginSession(default);
+        var confirm = source.Process(key, true, false, hotkeys);
+        Assert.Equal(binding.HasValue, KeyboardMenuMask.IsDragShortcut(confirm, binding));
+        Assert.False(KeyboardMenuMask.IsDragShortcut(confirm with { AppExpose = true }, binding));
+        Assert.False(KeyboardMenuMask.IsDragShortcut(confirm with { Modifiers = confirm.Modifiers ^ 1 }, binding));
+    }
+
+    [Fact]
+    public void FileDragDoesNotMaskUnrecognizedOrNonWinShortcuts()
+    {
+        var hotkeys = new OverviewHotkeys((_, _) => false, _ => true);
+        Assert.False(hotkeys.TryInitialize("Win+A", out _));
+        var source = new OverviewShortcutInput(new ScatterInteraction(), () => default, () => default);
+        source.Process(VK_LWIN, true, false, hotkeys);
+        Assert.False(KeyboardMenuMask.IsDragShortcut(source.Process('A', true, false, hotkeys), hotkeys.Normal));
+        hotkeys = new OverviewHotkeys((_, _) => true, _ => true);
+        Assert.True(hotkeys.TryInitialize("Ctrl+F11", out _));
+        source.Process(VK_LWIN, false, false, hotkeys);
+        source.Process(VK_LCONTROL, true, false, hotkeys);
+        var control = source.Process(0x7A, true, false, hotkeys);
+        Assert.True(control.Activate);
+        Assert.False(KeyboardMenuMask.IsDragShortcut(control, hotkeys.Normal));
+    }
+
     [Fact]
     public void RepeatedAndNonModifierKeysDoNotChangeModifiers()
     {

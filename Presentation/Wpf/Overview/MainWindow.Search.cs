@@ -23,7 +23,8 @@ public partial class MainWindow
     private void FocusOverviewInput()
     {
         chromeWindow.Activate();
-        SearchBox.Focus();
+        if (BlocksThumbnailInput) chromeWindow.Focus();
+        else SearchBox.Focus();
     }
 
     private void SearchBox_TextChanged(object sender, TextChangedEventArgs e)

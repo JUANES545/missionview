@@ -56,9 +56,11 @@ MissionView can intercept supported occupied shortcuts while it runs. Settings s
 
 ### Switch windows during a file drag (experimental)
 
-On one display, start dragging a disposable test file in Explorer with the left mouse button and keep it held. Press your overview shortcut, wait for the previews to settle, then move onto the body of a non-minimized window preview on the current virtual desktop. Hover highlights the preview without switching. Press the same shortcut again while still holding the button, then move to the real destination and release there.
+Start dragging a disposable test file in Explorer with the left mouse button and keep it held. Press your overview shortcut, wait for the previews to settle, then move onto the body of a non-minimized window preview on the current virtual desktop. With **All displays** enabled, you can hover a preview on another display. Press the same shortcut again while still holding the button, then move to the real destination and release there.
 
-MissionView checks only for the file-drop format and never accepts the drop. Press `Escape` to cancel. If you release over the overview, press the shortcut again to close it without switching. On multiple displays, the shortcut opens the standard overview instead. App Exposé and swapped mouse buttons are outside this prototype. Windows must deliver the shortcut and drag events during the Explorer drag and allow the target to take focus; the target app decides whether it accepts the file.
+MissionView checks only for the file-drop format and never accepts the drop. Press `Escape` to cancel. If you release before switching, press the shortcut again to close the overview without switching. App Exposé and swapped mouse buttons are outside this prototype. Windows must deliver the shortcut and drag events during the Explorer drag and allow the target to take focus; the target app decides whether it accepts the file.
+
+For a supported overview shortcut that includes `Win`, MissionView masks the Windows menu on the two shortcut presses during the drag. This does not make reserved shortcuts such as `Win+L` available.
 
 ## Make it yours
 
