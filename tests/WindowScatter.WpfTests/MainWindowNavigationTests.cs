@@ -16,13 +16,44 @@ public class MainWindowNavigationTests
 {
     [Theory]
     [InlineData(1, true)]
-    [InlineData(2, false)]
-    public void FileDragIntakeStartsOnlyWithOneDisplay(int displays, bool armed) => RunSta(() =>
+    [InlineData(2, true)]
+    public void FileDragIntakeStartsOnEveryOverviewView(int displays, bool armed) => RunSta(() =>
     {
         using var app = new MainWindow();
+        using var other = displays == 2 ? app.AddView(-1600, 0, 1600, 900, 1.25) : null;
         app.BeginFixtureFileDrag(displays);
         Assert.Equal(armed, app.FileDragArmed);
         Assert.Equal(armed, app.FileDragRoutesDropEvents);
+        if (other != null) Assert.True(other.FileDragRoutesDropEvents);
+    });
+
+    [Fact]
+    public void FileDragCrossesDisplaysAndRejectsAnOldShortcutOrLateLeave() => RunSta(() =>
+    {
+        using var app = new MainWindow();
+        using var other = app.AddView(-1600, 0, 1600, 900, 1.25);
+        var first = app.AddThumb(10, 0, 0, 100, 100).Identity;
+        var second = other.AddThumb(20, 0, 0, 100, 100).Identity;
+        app.BeginFixtureFileDrag(2);
+        app.HoverFixtureFileDrag(first);
+        var original = Assert.IsType<OverviewFileDrag.Hover>(app.FixtureDragHover);
+        other.HoverFixtureFileDrag(second);
+        var current = Assert.IsType<OverviewFileDrag.Hover>(app.FixtureDragHover);
+        Assert.Equal((true, DragDropEffects.None), app.EndFixtureFileDrag(DragDrop.PreviewDragLeaveEvent));
+        Assert.Equal(second.Handle, app.Selected);
+        Assert.Null(other.ConfirmFixtureDrag(original, true, second));
+        Assert.Null(app.ConfirmFixtureDrag(current, true, second));
+        Assert.Null(other.ConfirmFixtureDrag(current, false, second));
+        Assert.Equal(second, other.ConfirmFixtureDrag(current, true, second));
+        other.EndFixtureFileDrag(DragDrop.PreviewDragLeaveEvent);
+        other.HoverFixtureFileDrag(second);
+        Assert.Null(other.ConfirmFixtureDrag(current, true, second));
+        Assert.Equal(0, app.ActivationRequests);
+        other.EndFixtureFileDrag(DragDrop.PreviewDropEvent);
+        app.HoverFixtureFileDrag(first);
+        Assert.Null(app.FixtureDragHover);
+        app.ResetFixtureFileDrag();
+        Assert.False(other.FileDragRoutesDropEvents);
     });
 
     [Theory]
@@ -832,6 +863,9 @@ namespace WindowScatter
         }
 
         internal void HoverFixtureFileDrag(WindowActivationTarget target) => SetFileDragHover(target);
+        internal OverviewFileDrag.Hover? FixtureDragHover => coordinator.fileDrag?.Current;
+        internal WindowActivationTarget? ConfirmFixtureDrag(OverviewFileDrag.Hover? hover, bool held, WindowActivationTarget hit) =>
+            ConfirmFileDragHover(hover, held, hit);
         internal void ResetFixtureFileDrag() => ResetFileDrag();
 
         internal (bool Handled, DragDropEffects Effect) EndFixtureFileDrag(RoutedEvent routedEvent)

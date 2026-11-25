@@ -340,7 +340,10 @@ namespace WindowScatter
                     {
                         var fileDragAtPress = input.AppExpose ? null : fileDrag;
                         bool primaryHeld = !input.AppExpose && input.Activate && !drag.IsPressed && IsFileDragButtonDown();
-                        if (input.MaskMenus && !primaryHeld && fileDrag == null)
+                        bool maskDrag = fileDragAtPress is { Cancelled: false } ||
+                            fileDrag == null && !scatterInteraction.IsOpen && !desktopToggle.RestorePending;
+                        if (input.MaskMenus && (!primaryHeld && fileDrag == null ||
+                            primaryHeld && maskDrag && KeyboardMenuMask.IsDragShortcut(input, overviewHotkeys?.Normal)))
                             KeyboardMenuMask.TrySend(SendInput);
                         if (input.Activate)
                         {
