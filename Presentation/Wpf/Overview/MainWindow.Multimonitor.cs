@@ -34,8 +34,7 @@ namespace WindowScatter
             Height = monitor.Height / currentDpiScale;
             Left = monitor.Left / currentDpiScale;
             Top = monitor.Top / currentDpiScale;
-            SearchPanel.Width = Math.Min(260, Math.Max(0, Width - 96) / 2);
-            MoveStatus.Width = Math.Max(0, Width - 96 - SearchPanel.Width);
+            LayoutSearchPanel(Width, Height);
             EmptyMessage.Width = Math.Min(360, Math.Max(0, Width - 32));
             Canvas.SetLeft(EmptyMessage, (Width - EmptyMessage.Width) / 2);
             Canvas.SetTop(EmptyMessage, Height / 2 - 30);
@@ -67,6 +66,7 @@ namespace WindowScatter
 
         private void HideAllViews()
         {
+            HideSearchForTransition();
             StopCloseObservation();
             CloseMoveMenus();
             foreach (var view in views.ToArray())
@@ -80,8 +80,10 @@ namespace WindowScatter
         private void CleanupView()
         {
             InvalidateNavigation();
+            RefreshSearchPresentation();
             SearchBox.Text = "";
-            NoSearchResults.Visibility = Visibility.Collapsed;
+            SearchStatusText.Text = "";
+            SearchStatusText.Visibility = Visibility.Collapsed;
             CleanupMinimizedStrip();
             animationManager?.StopAllAnimations();
             thumbnailManager?.CleanupAllThumbnails();
@@ -95,12 +97,26 @@ namespace WindowScatter
         {
             if (!session.TryBeginClose(selection, isClosing || isScatterActive || AnyAnimating || isTransitioning || movingWindow,
                 out var target)) return;
+            HideSearchForTransition();
             CloseMoveMenus();
             int generation = scatterInteraction.Generation;
-            bool maximized = ViewFor(target.Handle)?.ViewThumbs.FirstOrDefault(t => t.WindowHandle == target.Handle)?.WasMaximized == true;
+            // Let WPF submit the hidden search chrome before the DWM return starts.
+            Dispatcher.BeginInvoke(new Action(() =>
+            {
+                if (!isClosing && generation == scatterInteraction.Generation)
+                    ReturnAllViews(selection, target, generation);
+            }), DispatcherPriority.Loaded);
+        }
+
+        private void ReturnAllViews(WindowActivationTarget? selection, WindowActivationTarget target, int generation)
+        {
+            var selected = ViewFor(target.Handle)?.ViewThumbs.FirstOrDefault(t => t.WindowHandle == target.Handle);
+            bool maximized = selected?.WasMaximized == true;
+            Func<bool>? stillValid = appExposeRequest == null && selected?.WasMinimized == true
+                ? () => IsOverviewShelfTargetAvailable(target.Handle) : null;
             var group = new OverviewReturnGroup(views.Count,
                 () => !isClosing && generation == scatterInteraction.Generation,
-                () => OnSwitchComplete(target, selection.HasValue, maximized));
+                () => OnSwitchComplete(target, selection.HasValue, maximized, stillValid));
             try
             {
                 CancelDrag();
@@ -407,6 +423,7 @@ namespace WindowScatter
         {
             if (!scatterInteraction.TryBeginClose(null, out var previous)) return;
             isTransitioning = true;
+            HideSearchForTransition();
             moveCancellation?.Cancel();
             CloseMoveMenus();
             CancelDrag();

@@ -6,6 +6,7 @@ namespace WindowScatter
     {
         public IntPtr Handle;
         public string Title = string.Empty;
+        public string? ApplicationName;
         public PhysicalWindowRect OriginalRect;
         public bool WasMaximized;
         public bool WasMinimized;

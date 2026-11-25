@@ -15,6 +15,39 @@ using Xunit;
 
 public class MinimizedShelfTests
 {
+    [Theory]
+    [InlineData(46)]
+    [InlineData(64)]
+    public void MinimizedCloseButtonAndGlyphAreCenteredInTheTile(double height) => RunSta(() =>
+    {
+        var strip = new MinimizedWindowStrip([Info(1)], 600, 600, 1, _ => { }, _ => { });
+        var thumb = Assert.Single(strip.Thumbs);
+        var tile = thumb.ClickBorder;
+        tile.Height = height;
+        int closed = 0;
+        OverviewCloseInput.Attach(thumb, thumb.Title, () => true, () => closed++);
+        var canvas = Arrange(strip, 600, 600);
+        var close = thumb.CloseButton!;
+        close.ApplyTemplate();
+        canvas.UpdateLayout();
+        var circle = Assert.IsType<Ellipse>(close.Template.FindName("Circle", close));
+        var glyph = Assert.Single(((Grid)VisualTreeHelper.GetChild(close, 0)).Children.OfType<Path>());
+        Assert.Equal(height, tile.ActualHeight);
+        Assert.Equal(28, close.ActualHeight);
+        foreach (var visual in new FrameworkElement[] { close, circle, glyph })
+        {
+            double center = visual.TranslatePoint(new Point(0, visual.ActualHeight / 2), tile).Y;
+            Assert.Equal(height / 2, center, 5);
+        }
+        Assert.True(close.Focusable);
+        Assert.False(close.IsTabStop);
+        thumb.CloseButton!.ApplyPalette(true);
+        var peer = UIElementAutomationPeer.CreatePeerForElement(close)!;
+        ((IInvokeProvider)peer.GetPattern(PatternInterface.Invoke)!).Invoke();
+        close.Dispatcher.Invoke(() => { }, DispatcherPriority.Background);
+        Assert.Equal(1, closed);
+    });
+
     [Fact]
     public void OneItemShelfUsesOnlyItsApprovedFootprint()
         => RunSta(() =>

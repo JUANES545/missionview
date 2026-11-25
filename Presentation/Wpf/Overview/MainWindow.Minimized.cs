@@ -1,5 +1,6 @@
 using System.Windows;
 using System.Windows.Controls;
+using static WindowScatter.Win32Interop;
 
 namespace WindowScatter
 {
@@ -8,7 +9,12 @@ namespace WindowScatter
         private MinimizedWindowStrip? minimizedStrip;
         private IEnumerable<WindowThumb> ViewThumbs => windowThumbs.Concat(minimizedStrip?.Thumbs ?? []);
         private double OverviewContentHeight => monitorPixelHeight - (minimizedStrip?.Geometry.ReservedHeight ?? 0) * currentDpiScale;
-        private bool IncludeMinimizedWindows => coordinator.appExposeRequest != null && coordinator.showMinimizedWindows;
+        private bool IncludeMinimizedWindows => coordinator.showMinimizedWindows;
+
+        private static bool IsOverviewShelfTargetAvailable(IntPtr handle) =>
+            IsWindowVisible(handle) && IsWindowEnabled(handle) &&
+            DwmGetWindowAttributeInt(handle, DWMWA_CLOAKED, out int cloaked, sizeof(int)) >= 0 &&
+            cloaked == 0 && CurrentVirtualDesktop.Contains(handle);
 
         private void RebuildThumbnails(IReadOnlyList<IntPtr> sourceOrder, List<WindowInfo> windows, bool settled)
         {
@@ -56,9 +62,10 @@ namespace WindowScatter
                         coordinator.movingWindow || coordinator.navigationPending || coordinator.drag.IsPressed)
                         throw new InvalidOperationException("Window selection is unavailable during an overview transition.");
                     coordinator.SelectWindow(handle);
-                })
+                }, selectionBorderColor: () => settings.SelectionBorderColor)
             { Visibility = settled ? Visibility.Visible : Visibility.Hidden };
             foreach (var thumb in minimizedStrip.Thumbs) ConfigureCloseInput(thumb);
+            minimizedStrip.ApplyPalette(SystemParameters.HighContrast);
             Panel.SetZIndex(minimizedStrip, 2);
             ChromeCanvas.Children.Add(minimizedStrip);
         }

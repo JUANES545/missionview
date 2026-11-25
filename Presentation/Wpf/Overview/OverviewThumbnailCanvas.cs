@@ -186,12 +186,12 @@ internal sealed class OverviewCloseButton : Button
         ApplyPalette(SystemParameters.HighContrast);
     }
 
-    internal void ApplyPalette(bool highContrast)
+    internal void ApplyPalette(bool highContrast, Brush? selectionBorder = null)
     {
         Background = highContrast ? SystemColors.WindowBrush : SharedBrushes.Text;
         Foreground = highContrast ? SystemColors.WindowTextBrush : SharedBrushes.Graphite;
         BorderBrush = highContrast ? SystemColors.HighlightBrush : SharedBrushes.Graphite;
-        Resources["CloseHover"] = highContrast ? SystemColors.HighlightBrush : SharedBrushes.Mint;
+        Resources["CloseHover"] = highContrast ? SystemColors.HighlightBrush : selectionBorder ?? Brushes.White;
     }
 
     protected override void OnClick()
@@ -243,6 +243,7 @@ internal static class OverviewCloseInput
         {
             Visibility = border.IsHitTestVisible ? Visibility.Visible : Visibility.Hidden
         };
+        if (thumb.WasMinimized) button.VerticalAlignment = VerticalAlignment.Center;
         grid.Children.Add(button);
         border.Child = grid;
         thumb.CloseButton = button;

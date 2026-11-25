@@ -112,6 +112,13 @@ namespace WindowScatter
             AccessKeyManager.Register("S", DesktopButton);
             RenderCanvas.Children.Remove(ChromeCanvas);
             chromeWindow = new OverviewChromeWindow(this, ChromeCanvas);
+            chromeWindow.SizeChanged += (_, e) => LayoutSearchPanel(e.NewSize.Width, e.NewSize.Height);
+            chromeWindow.Activated += (_, _) =>
+            {
+                if (!CanUseSearch || coordinator.searchInputView == this) return;
+                SetSearchInputView();
+                SearchBox.Focus();
+            };
             ConfigureFileDragInput();
             chromeWindow.PreviewKeyDown += Window_KeyDown;
             chromeWindow.PreviewKeyUp += Window_KeyUp;
@@ -229,7 +236,14 @@ namespace WindowScatter
                 }
                 // Let FinishAnimation complete its keep-alive setup before
                 // starting a return animation requested while opening.
-                Dispatcher.BeginInvoke(new Action(coordinator.TryDismissScatter));
+                int generation = scatterInteraction.Generation;
+                Dispatcher.BeginInvoke(new Action(() =>
+                {
+                    if (generation != scatterInteraction.Generation) return;
+                    coordinator.TryDismissScatter();
+                    if (scatterInteraction.IsOwnWindow(GetForegroundWindow()))
+                        coordinator.ShowSettledSearchInput();
+                }));
             };
 
             if (!useDesktopCapture)
@@ -595,6 +609,7 @@ namespace WindowScatter
         {
             if (!CanActivateScatter()) return;
             isScatterActive = true;
+            HideSearchForTransition();
             int generation = 0;
             try
             {
@@ -680,10 +695,13 @@ namespace WindowScatter
             if (thumb != null) coordinator.CloseAllViews(thumb.Identity);
         }
 
-        private void OnSwitchComplete(WindowActivationTarget target, bool restore, bool wasMaximized)
+        private void OnSwitchComplete(WindowActivationTarget target, bool restore, bool wasMaximized, Func<bool>? stillValid = null)
         {
             if (isClosing) return;
-            windowActivation.CloseOverviewAndActivate(target, restore, wasMaximized, scatterInteraction.Surfaces, HideAllViews);
+            if (restore)
+                windowActivation.CompleteSelectionReturn(target, wasMaximized, scatterInteraction.Surfaces, HideAllViews, stillValid);
+            else
+                windowActivation.CloseOverviewAndActivate(target, restore: false, wasMaximized, scatterInteraction.Surfaces, HideAllViews);
 
             QueueOverviewCleanup();
         }
@@ -726,6 +744,7 @@ namespace WindowScatter
             if (isClosing || isScatterActive || isTransitioning || AnyAnimating || movingWindow) return;
             if (!scatterInteraction.TryBeginClose(null, out _)) return;
             isTransitioning = true;
+            HideSearchForTransition();
             try
             {
                 if (!desktopToggle.CompleteOverviewExit(

@@ -274,7 +274,7 @@ public class NormalThumbnailAutomationTests
             button.ApplyPalette(false);
             Assert.Same(SharedBrushes.Text, button.Background);
             Assert.Same(SharedBrushes.Graphite, button.Foreground);
-            Assert.Same(SharedBrushes.Mint, button.Resources["CloseHover"]);
+            Assert.Same(Brushes.White, button.Resources["CloseHover"]);
             Assert.Equal((300d, 200d, 300d), (target.Width, target.Height, label.Width));
             Assert.Null(button.Effect);
         });
@@ -361,6 +361,37 @@ public class NormalThumbnailAutomationTests
             settings.SelectionBorderColor = "Blue";
             manager.ApplyPalette(false, false);
             Assert.Equal(Color.FromRgb(0, 120, 215), ((SolidColorBrush)frame.BorderBrush).Color);
+        });
+
+    [Fact]
+    public void NormalAndMinimizedCloseHoverFollowTheLiveSelectionBorder()
+        => RunSta(() =>
+        {
+            string color = "Blue";
+            var frame = new Border();
+            var thumb = new WindowThumb { ClickBorder = new OverviewThumbnail("Document"),
+                TitleLabel = new TextBlock(), HighlightBorder = frame };
+            OverviewCloseInput.Attach(thumb, "Document", () => true, () => { });
+            var manager = new ThumbnailManager(new Canvas(), [thumb], IntPtr.Zero, _ => { }, _ => { },
+                selectionBorderColor: () => color);
+            var shelf = new MinimizedWindowStrip([new WindowInfo { Handle = new(1), Title = "Minimized" }],
+                1600, 900, 1, _ => { }, _ => { }, _ => null, selectionBorderColor: () => color);
+            var shelfThumb = Assert.Single(shelf.Thumbs);
+            OverviewCloseInput.Attach(shelfThumb, "Minimized", () => true, () => { });
+
+            void Check(bool highContrast, Brush expected)
+            {
+                manager.ApplyPalette(highContrast, false);
+                shelf.ApplyPalette(highContrast);
+                Assert.Same(expected, frame.BorderBrush);
+                Assert.Same(frame.BorderBrush, thumb.CloseButton!.Resources["CloseHover"]);
+                Assert.Same(frame.BorderBrush, shelfThumb.CloseButton!.Resources["CloseHover"]);
+            }
+
+            Check(false, SharedBrushes.Blue);
+            color = "White";
+            Check(false, Brushes.White);
+            Check(true, SystemColors.HighlightBrush);
         });
 
     [Fact]

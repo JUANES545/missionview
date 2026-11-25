@@ -515,19 +515,12 @@ public sealed class SettingsPresentationTests
                 var startup = Logical(window).OfType<CheckBox>().Single(c => Equals(c.Content, "Start with Windows"));
                 Assert.Contains(startup, Logical(((TabItem)tabs.Items[0]).Content).OfType<CheckBox>());
                 Logical(window).OfType<TextBox>().Single().Text = "invalid";
-                Click(window, "Save");
+                window.CommitDelay();
                 Layout(root, width, height - 40);
                 Assert.Equal(2, tabs.SelectedIndex);
                 Assert.Contains(Logical(window).OfType<TextBlock>(), t => t.Text.StartsWith("Enter a delay"));
                 Capture(root, $"settings-{(int)width}-{(int)height}-font{font}-error.png");
-                foreach (var caption in new[] { "Cancel", "Save" })
-                {
-                    var action = Logical(window).OfType<Button>().Single(b => Equals(b.Content, caption));
-                    var point = action.TranslatePoint(new Point(), root);
-                    Assert.InRange(point.Y, 0, root.ActualHeight);
-                    Assert.True(point.Y + action.ActualHeight <= root.ActualHeight + 1);
-                    Assert.True(action.IsEnabled && action.Focusable && action.IsTabStop);
-                }
+                Assert.DoesNotContain(Logical(window).OfType<Button>(), b => b.Content is "Save" or "Cancel");
                 Assert.True(System.Windows.Input.KeyboardNavigation.GetTabIndex(tabs)
                     < System.Windows.Input.KeyboardNavigation.GetTabIndex(Logical(window).OfType<StackPanel>()
                         .Single(p => p.Children.OfType<ScrollViewer>().Any(s => s.Content is TextBlock t &&
@@ -647,7 +640,7 @@ public sealed class SettingsPresentationTests
                 Assert.Equal(Color.FromRgb(48, 59, 52), ((SolidColorBrush)delay.Background).Color);
                 var frame = (Border)delay.Template.FindName("Frame", delay);
                 delay.Text = "invalid";
-                Click(window, "Save");
+                window.CommitDelay();
                 Layout(root, 720, 440);
                 Assert.Equal(Color.FromRgb(255, 180, 171), ((SolidColorBrush)frame.BorderBrush).Color);
                 Capture(root, "settings-native-fields-error.png");
@@ -784,7 +777,7 @@ public sealed class SettingsPresentationTests
                 var delay = Logical(window).OfType<TextBox>().Single();
                 Layout(root, 360, 440);
                 delay.Text = "invalid";
-                Click(window, "Save");
+                window.CommitDelay();
                 Layout(root, 360, 440);
                 var scroll = Visual(root).OfType<ScrollViewer>().Single(s => s.Content is DockPanel);
                 Assert.True(scroll.ViewportHeight > 0);
@@ -797,14 +790,8 @@ public sealed class SettingsPresentationTests
                 Assert.True(point.Y + delay.ActualHeight <= scroll.ViewportHeight + 1);
                 Assert.True(delay.IsEnabled && delay.Focusable && delay.IsTabStop);
                 Capture(root, "settings-360-480-font28-error-field-revealed.png");
-                foreach (string caption in new[] { "Save", "Cancel" })
-                {
-                    var action = Logical(window).OfType<Button>().Single(b => Equals(b.Content, caption));
-                    var top = action.TranslatePoint(new Point(), root).Y;
-                    Assert.InRange(top, 0, root.ActualHeight - action.ActualHeight + 1);
-                }
                 delay.Text = "750";
-                Click(window, "Save");
+                window.CommitDelay();
                 Assert.Equal(750, saved?.HotCornerDelay);
             }
             finally { window.Close(); }
@@ -858,10 +845,10 @@ public sealed class SettingsPresentationTests
                 var tabs = Logical(window).OfType<TabControl>().Single();
                 var delay = Logical(window).OfType<TextBox>().Single();
                 delay.Text = "invalid";
-                Click(window, "Save");
+                window.CommitDelay();
                 Assert.Equal(2, tabs.SelectedIndex);
                 Assert.Equal(0, calls);
-                Click(window, "Cancel");
+                window.Close();
                 Assert.Equal(0, calls);
             }
             finally { window.Close(); }
@@ -879,7 +866,7 @@ public sealed class SettingsPresentationTests
             try
             {
                 Logical(window).OfType<TextBox>().Single().Text = "725";
-                Click(window, "Save");
+                window.CommitDelay();
                 Assert.NotNull(saved);
                 Assert.Equal(appShortcut, saved.AppExposeHotkey);
                 Assert.Equal("Win+F12", saved.Hotkey);
@@ -893,8 +880,9 @@ public sealed class SettingsPresentationTests
         => Sta(() =>
         {
             AppSettings? saved = null;
-            var window = new SettingsWindow(new AppSettings { Hotkey = "Win+F12" },
-                value => { saved = value; return true; }, new TextBlock(), () => true);
+            var source = new AppSettings { Hotkey = "Win+F12" };
+            var window = new SettingsWindow(source,
+                value => { saved = value; source.CopyFrom(value); return true; }, new TextBlock(), () => true);
             try
             {
                 var normal = NamedButton(window, "Overview shortcut");
@@ -916,7 +904,6 @@ public sealed class SettingsPresentationTests
                 window.RecordVirtualKey(0x77, 12, true);
                 Assert.False(window.IsRecordingShortcut);
                 Assert.Equal("Win+Shift+F8", normal.Content);
-                Click(window, "Save");
                 Assert.Equal("Win+Shift+F8", saved?.Hotkey);
                 Assert.Equal("Ctrl+Alt+F9", saved?.AppExposeHotkey);
             }
@@ -935,7 +922,6 @@ public sealed class SettingsPresentationTests
                 var app = NamedButton(window, "App Exposé shortcut");
                 app.RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
                 window.RecordVirtualKey(0x78, 3, true);
-                Click(window, "Save");
                 Assert.Equal("Ctrl+Alt+F9", attempted?.AppExposeHotkey);
                 Assert.Equal("Win+Shift+F12", app.Content);
                 app.RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
@@ -943,9 +929,8 @@ public sealed class SettingsPresentationTests
                 window.RecordVirtualKey(0x1B, 0, true);
                 Assert.True(window.RecordingGeneration > generation);
                 Assert.False(window.IsRecordingShortcut);
-                Click(window, "Save");
                 Assert.NotNull(attempted);
-                Assert.Null(attempted.AppExposeHotkey);
+                Assert.Equal("Ctrl+Alt+F9", attempted.AppExposeHotkey);
                 Assert.Equal("Win+F12", attempted.Hotkey);
             }
             finally { window.Close(); }
@@ -1009,9 +994,13 @@ public sealed class SettingsPresentationTests
         return (Math.Max(x, y) + .05) / (Math.Min(x, y) + .05);
     }
 
-    private static SettingsWindow Create() => new(new AppSettings { Hotkey = "Win+F12" }, _ => true,
-        new StackPanel { Children = { new Button { Content = "Check for updates", MinHeight = 40,
-            Padding = new Thickness(16, 10, 16, 10) } } }, () => true);
+    private static SettingsWindow Create()
+    {
+        var source = new AppSettings { Hotkey = "Win+F12" };
+        return new(source, value => { source.CopyFrom(value); return true; },
+            new StackPanel { Children = { new Button { Content = "Check for updates", MinHeight = 40,
+                Padding = new Thickness(16, 10, 16, 10) } } }, () => true);
+    }
 
     private static void Layout(FrameworkElement root, double width, double height)
     {

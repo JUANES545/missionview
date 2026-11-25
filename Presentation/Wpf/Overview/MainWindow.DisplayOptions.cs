@@ -21,6 +21,7 @@ public partial class MainWindow
         bool motion = settings.AllowsMotion(systemAnimation);
         animationManager?.SetMotionEnabled(motion);
         thumbnailManager?.ApplyPalette(highContrast, motion);
+        minimizedStrip?.ApplyPalette(highContrast);
         DimOverlay.Background = highContrast ? System.Windows.SystemColors.WindowBrush
             : new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromArgb(
                 (byte)Math.Round(settings.BackgroundDimming * 255 / 100), 32, 37, 34));
@@ -33,8 +34,9 @@ public partial class MainWindow
         var visible = MonitorHelper.OverviewMonitors(monitors, settings.OverviewMonitorScope, pointerMonitor);
         var displays = visible.Select(m => m.Handle).OrderBy(h => h.ToInt64()).ToArray();
         var application = appExposeRequest?.Application;
+        bool includeMinimized = appExposeRequest == null ? settings.ShowMinimizedWindowsInOverview : settings.ShowMinimizedWindows;
         if (!MonitorHelper.SameTopology(layoutTopology, monitors) || !layoutDisplays.SequenceEqual(displays) ||
-            layoutScope != settings.OverviewMonitorScope || layoutIncludesMinimized != settings.ShowMinimizedWindows ||
+            layoutScope != settings.OverviewMonitorScope || layoutIncludesMinimized != includeMinimized ||
             (layoutApplication == null ? application != null : application == null || !layoutApplication.Matches(application)))
             layoutCalculators.Clear();
         layoutTopology = monitors.Select(m => new MonitorHelper.MonitorBounds
@@ -45,10 +47,10 @@ public partial class MainWindow
         layoutDisplays = displays;
         layoutScope = settings.OverviewMonitorScope;
         layoutApplication = application;
-        layoutIncludesMinimized = settings.ShowMinimizedWindows;
+        layoutIncludesMinimized = includeMinimized;
         monitor = visible.FirstOrDefault(m => m.Handle == pointerMonitor)
             ?? throw new InvalidOperationException("The pointer display is no longer available. Open the overview again.");
-        showMinimizedWindows = settings.ShowMinimizedWindows;
+        showMinimizedWindows = includeMinimized;
         foreach (var other in visible.Where(m => m.Handle != monitor.Handle))
         {
             var view = new MainWindow(this) { monitor = other };
