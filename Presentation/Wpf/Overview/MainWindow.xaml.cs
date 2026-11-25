@@ -313,6 +313,23 @@ namespace WindowScatter
             }
         }
 
+        private bool CanUseAltTab()
+        {
+            if (isClosing || Dispatcher.HasShutdownStarted || hookID == IntPtr.Zero || animationManager == null ||
+                overviewHotkeys?.Normal == null || isTransitioning || movingWindow || desktopToggle.RestorePending)
+                return false;
+            var foreground = GetForegroundWindow();
+            if (scatterInteraction.IsOpen)
+                return scatterInteraction.IsOwnWindow(foreground) ||
+                    ((!IsVisible || fileDrag is { Cancelled: false }) &&
+                    windowActivation.Capture(foreground) == scatterInteraction.PreviousWindow);
+            return CanActivateScatter() && foreground != IntPtr.Zero &&
+                !scatterInteraction.IsOwnWindow(foreground) && windowActivation.Capture(foreground).ProcessId != 0;
+        }
+
+        private bool CanHandleExactAltTab() =>
+            OverviewShortcutInput.IsExactLeftAlt(key => GetAsyncKeyState(key) < 0) && CanUseAltTab();
+
         private IntPtr HookCallback(int nCode, IntPtr wParam, IntPtr lParam)
         {
             if (nCode >= 0)
@@ -325,7 +342,8 @@ namespace WindowScatter
                     bool injected = (Marshal.ReadInt32(lParam, 8) & 0x10) != 0;
                     bool recording = false;
                     QueryShortcutRecording(ref recording);
-                    var input = shortcutInput.Process(key, down, recording, overviewHotkeys, injected);
+                    var input = shortcutInput.Process(key, down, recording, overviewHotkeys, injected,
+                        key == VK_TAB && overviewHotkeys?.Normal?.IsAltTab == true ? CanHandleExactAltTab : null);
                     if (recording && !injected)
                         RecordOverviewShortcutKey(key, input.Modifiers, down);
                     if (!injected && !recording && down && key == VK_ESCAPE && fileDrag is { Cancelled: false } canceled)
@@ -343,7 +361,8 @@ namespace WindowScatter
                         bool maskDrag = fileDragAtPress is { Cancelled: false } ||
                             fileDrag == null && !scatterInteraction.IsOpen && !desktopToggle.RestorePending;
                         if (input.MaskMenus && (!primaryHeld && fileDrag == null ||
-                            primaryHeld && maskDrag && KeyboardMenuMask.IsDragShortcut(input, overviewHotkeys?.Normal)))
+                            primaryHeld && maskDrag && (input.AltTab ||
+                                KeyboardMenuMask.IsDragShortcut(input, overviewHotkeys?.Normal))))
                             KeyboardMenuMask.TrySend(SendInput);
                         if (input.Activate)
                         {
@@ -353,6 +372,18 @@ namespace WindowScatter
                             this.Dispatcher.BeginInvoke(new Action(async () =>
                             {
                                 if (isClosing || overviewHotkeys?.Revision != revision) return;
+                                WindowActivationTarget? altTabOrigin = null;
+                                if (input.AltTab)
+                                {
+                                    if (input.Foreground == default && generation != scatterInteraction.Generation) return;
+                                    if (!CanUseAltTab()) return;
+                                    if (!scatterInteraction.IsOpen)
+                                    {
+                                        if (input.Foreground.ProcessId == 0 ||
+                                            input.Foreground != windowActivation.Capture(GetForegroundWindow())) return;
+                                        altTabOrigin = input.Foreground;
+                                    }
+                                }
                                 if (input.AppExpose) await ToggleAppExposeAsync(input.Foreground, input.ApplicationWindow, input.CaptureError);
                                 else if (drag.IsPressed) await ToggleScatterAsync();
                                 else if (fileDragAtPress != null) ConfirmFileDrag(fileDragAtPress, hover, primaryHeld);
@@ -360,9 +391,9 @@ namespace WindowScatter
                                 {
                                     if (generation == scatterInteraction.Generation && !scatterInteraction.IsOpen &&
                                         !desktopToggle.RestorePending)
-                                        await ToggleScatterAsync(openingWithFileDrag: true);
+                                        await ToggleScatterAsync(openingWithFileDrag: true, altTabOrigin: altTabOrigin);
                                 }
-                                else if (fileDrag == null) await ToggleScatterAsync();
+                                else if (fileDrag == null) await ToggleScatterAsync(altTabOrigin: altTabOrigin);
                             }));
                         }
                         return (IntPtr)1;
@@ -518,9 +549,10 @@ namespace WindowScatter
             }
         }
 
-        private async System.Threading.Tasks.Task ToggleScatterAsync(bool openingWithFileDrag = false)
+        private async System.Threading.Tasks.Task ToggleScatterAsync(bool openingWithFileDrag = false,
+            WindowActivationTarget? altTabOrigin = null)
         {
-            if (!IsCoordinator) { await coordinator.ToggleScatterAsync(openingWithFileDrag); return; }
+            if (!IsCoordinator) { await coordinator.ToggleScatterAsync(openingWithFileDrag, altTabOrigin); return; }
             if (animationManager == null || isTransitioning || movingWindow) return;
             if (drag.IsPressed) { CancelDrag(); return; }
             if (fileDrag != null) { DismissFileDrag(null); return; }
@@ -535,7 +567,7 @@ namespace WindowScatter
                 TryDismissScatter();
             }
             else if (CanActivateScatter())
-                await StartScatterAsync(openingWithFileDrag: openingWithFileDrag);
+                await StartScatterAsync(openingWithFileDrag: openingWithFileDrag, altTabOrigin: altTabOrigin);
         }
 
         private void RequestDismissScatter()
@@ -559,7 +591,7 @@ namespace WindowScatter
         }
 
         private async System.Threading.Tasks.Task StartScatterAsync(AppExposeRequest? request = null,
-            bool openingWithFileDrag = false)
+            bool openingWithFileDrag = false, WindowActivationTarget? altTabOrigin = null)
         {
             if (!CanActivateScatter()) return;
             isScatterActive = true;
@@ -567,7 +599,7 @@ namespace WindowScatter
             try
             {
                 appExposeRequest = request;
-                var previous = request?.Foreground ?? windowActivation.Capture(GetForegroundWindow());
+                var previous = altTabOrigin ?? request?.Foreground ?? windowActivation.Capture(GetForegroundWindow());
                 IntPtr previousWindow = previous.Handle;
                 scatterInteraction.BeginSession(previous);
                 generation = scatterInteraction.Generation;
@@ -604,10 +636,20 @@ namespace WindowScatter
                     CancelForTopologyChange();
                     return;
                 }
+                if (altTabOrigin is { } origin && windowActivation.Capture(GetForegroundWindow()) != origin)
+                {
+                    CancelSessionImmediately();
+                    return;
+                }
                 foreach (var view in views) view.ShowView();
                 activeView = this;
                 SelectWindow(fileDrag != null ? IntPtr.Zero :
                     OverviewPreview.InitialSelection(previousWindow, AllThumbs().Select(t => t.WindowHandle)));
+                if (altTabOrigin is { } selectedOrigin && windowActivation.Capture(GetForegroundWindow()) != selectedOrigin)
+                {
+                    CancelSessionImmediately();
+                    return;
+                }
                 activeView!.FocusOverviewInput();
                 ApplyWorkingSetFloor();
                 foreach (var view in views)

@@ -1,8 +1,10 @@
+using static WindowScatter.ModifierKeyCodes;
+
 namespace WindowScatter
 {
     internal readonly record struct OverviewShortcutEvent(bool Suppress, bool Activate, bool AppExpose,
         int Modifiers, WindowActivationTarget Foreground, WindowActivationTarget ApplicationWindow = default,
-        string? CaptureError = null, bool MaskMenus = false);
+        string? CaptureError = null, bool MaskMenus = false, bool AltTab = false);
 
     internal sealed class OverviewShortcutInput
     {
@@ -26,8 +28,11 @@ namespace WindowScatter
             interaction.ActivationKeyUp();
         }
 
+        internal static bool IsExactLeftAlt(Func<int, bool> held) => held(VK_LMENU) &&
+            !held(VK_RMENU) && !held(VK_CONTROL) && !held(VK_SHIFT) && !held(VK_LWIN) && !held(VK_RWIN);
+
         public OverviewShortcutEvent Process(int key, bool down, bool recording, OverviewHotkeys? bindings,
-            bool injected = false)
+            bool injected = false, Func<bool>? canUseAltTab = null)
         {
             // Injected input passes through; it must not release or latch a physical shortcut.
             if (injected) return new(false, false, false, modifiers.Modifiers, default);
@@ -57,8 +62,10 @@ namespace WindowScatter
                 return new(suppressedKeys.Remove(key), false, false, modifiers.Modifiers, default);
             }
             bool firstDown = pressedKeys.Add(key);
-            bool normal = bindings?.MatchesNormal(key, modifiers.Modifiers) == true;
-            bool app = bindings?.MatchesAppExpose(key, modifiers.Modifiers) == true;
+            bool configuredAltTab = bindings?.Normal?.IsAltTab == true;
+            bool altTab = configuredAltTab && firstDown && key == OverviewHotkey.Tab && canUseAltTab?.Invoke() == true;
+            bool normal = configuredAltTab ? altTab : bindings?.MatchesNormal(key, modifiers.Modifiers) == true;
+            bool app = !altTab && bindings?.MatchesAppExpose(key, modifiers.Modifiers) == true;
             if (firstDown && (normal || app)) suppressedKeys.Add(key);
             bool activate = firstDown && (normal || app);
             // Capture in the hook, before its caller can schedule or activate an overlay.
@@ -80,7 +87,7 @@ namespace WindowScatter
                 }
             }
             return new(suppressedKeys.Contains(key), activate, app, modifiers.Modifiers, foreground, applicationWindow,
-                captureError, firstDown && (normal || app) && (modifiers.Modifiers & 0x0A) != 0);
+                captureError, altTab || activate && (modifiers.Modifiers & 0x0A) != 0, altTab);
         }
     }
 }

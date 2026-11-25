@@ -478,6 +478,13 @@ public sealed class SettingsPresentationTests
                     {
                         if (index == 0) Assert.True(scroll.ScrollableHeight > 0,
                             $"General extent={scroll.ExtentHeight}, viewport={scroll.ViewportHeight}, panel={panel.ActualHeight}, outer={Visual(root).OfType<ScrollViewer>().Single(s => s.Content is DockPanel).ScrollableHeight}");
+                        else if (index == 1 && height == 480)
+                        {
+                            Assert.InRange(scroll.ScrollableHeight, 0, 40);
+                            var useAltTab = Logical(panel).OfType<Button>().Single(b => Equals(b.Content, "Use Alt+Tab"));
+                            Assert.InRange(useAltTab.TranslatePoint(new Point(0, useAltTab.ActualHeight), scroll).Y,
+                                0, scroll.ViewportHeight);
+                        }
                         else Assert.Equal(0, scroll.ScrollableHeight);
                     }
                     foreach (var label in panel.Children.OfType<Grid>().Select(r => (Label)r.Children[0]))

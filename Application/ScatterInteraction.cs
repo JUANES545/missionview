@@ -12,6 +12,7 @@ namespace WindowScatter
         private readonly HashSet<IntPtr> surfaces = new();
         public int Generation { get; private set; }
         public bool IsOpen => sessionOpen;
+        public WindowActivationTarget PreviousWindow => previousWindow;
         public IReadOnlySet<IntPtr> Surfaces => surfaces;
         public void RegisterSurface(IntPtr handle) { if (handle != IntPtr.Zero) surfaces.Add(handle); }
         public void UnregisterSurface(IntPtr handle) => surfaces.Remove(handle);

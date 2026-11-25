@@ -86,7 +86,8 @@ public class KeyboardModifierTests
 
     public static IEnumerable<object[]> WinOverviewShortcuts =>
         Enumerable.Range('A', 26).Select(key => new object[] { $"Win+{(char)key}", key })
-            .Concat(new object[][] { ["Win+F12", 0x7B], ["Win+1", (int)'1'],
+            .Concat(Enumerable.Range(1, 24).Select(number => new object[] { $"Win+F{number}", 0x70 + number - 1 }))
+            .Concat(new object[][] { ["Win+1", (int)'1'],
                 ["Win+Ctrl+Left", 0x25], ["Win+Alt+PageDown", 0x22], ["Win+Shift+Space", 0x20] });
 
     [Theory]
@@ -110,6 +111,10 @@ public class KeyboardModifierTests
         foreach (var (modifier, virtualKey) in new[] { (1, VK_LCONTROL), (2, VK_LMENU), (4, VK_LSHIFT) })
             if ((binding?.Modifiers & modifier) == modifier) source.Process(virtualKey, true, false, hotkeys);
 
+        int otherKey = key == 0x70 ? 0x71 : 0x70;
+        var unmatched = source.Process(otherKey, true, false, hotkeys);
+        Assert.False(unmatched.Suppress);
+        Assert.False(KeyboardMenuMask.IsDragShortcut(unmatched, binding));
         Assert.False(KeyboardMenuMask.IsDragShortcut(source.Process(key, true, false, hotkeys, injected: true), binding));
         var open = source.Process(key, true, false, hotkeys);
         Assert.Equal(binding.HasValue, KeyboardMenuMask.IsDragShortcut(open, binding));
