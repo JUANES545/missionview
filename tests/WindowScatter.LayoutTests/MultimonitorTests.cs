@@ -244,6 +244,81 @@ public class MultimonitorTests
     }
 
     [Fact]
+    public void GeneralOverviewMinimizedOptInAppliesOnlyToTheAssignedVisibleDisplay()
+    {
+        var left = new MonitorHelper.MonitorBounds { Handle = new(1) };
+        var right = new MonitorHelper.MonitorBounds { Handle = new(2) };
+        var first = new WindowInfo { Handle = new(10), WasMinimized = true };
+        var second = new WindowInfo { Handle = new(20), WasMinimized = true };
+        var normal = new WindowInfo { Handle = new(21) };
+        (IntPtr, WindowInfo)[] candidates = [(left.Handle, first), (right.Handle, second), (right.Handle, normal)];
+        Assert.Equal([normal], WindowEnumerator.GroupByMonitor(candidates, [right])[right.Handle]);
+        var scoped = WindowEnumerator.GroupByMonitor(candidates, [right], showMinimizedInOverview: true);
+        Assert.Equal([second, normal], Assert.Single(scoped).Value);
+        var all = WindowEnumerator.GroupByMonitor(candidates, [left, right], showMinimizedInOverview: true);
+        Assert.Equal([first], all[left.Handle]);
+        Assert.Equal([second, normal], all[right.Handle]);
+    }
+
+    [Fact]
+    public void SelectionReturnDoesNotRestoreAWindowThatBecameUnavailable()
+    {
+        var foreground = new IntPtr(21);
+        bool hidden = false;
+        var activation = new WindowActivation(_ => (1, 2),
+            (_, _) => throw new InvalidOperationException("Stale target must not be restored."),
+            _ => throw new InvalidOperationException("Stale target must not be activated."), () => foreground);
+        Assert.False(activation.CompleteSelectionReturn(activation.Capture(new(51)), false,
+            new HashSet<IntPtr> { foreground }, () => hidden = true, stillValid: () => false));
+        Assert.True(hidden);
+    }
+
+    [Fact]
+    public void SelectionReturnDoesNotRevealTheOldForegroundBetweenCoverAndActivation()
+    {
+        IntPtr front = new(50), back = new(51), active = new(21);
+        bool covered = true;
+        var frames = new List<IntPtr>();
+        var activation = new WindowActivation(_ => (1, 2), (_, _) => { },
+            target =>
+            {
+                if (!covered) frames.Add(active == back ? back : front);
+                active = target;
+                return true;
+            }, () => active, _ => false);
+        var target = activation.Capture(back);
+        var group = new OverviewReturnGroup(2, () => true,
+            () => Assert.True(activation.CompleteSelectionReturn(target, false,
+                new HashSet<IntPtr> { new(11), new(21) }, () =>
+                {
+                    covered = false;
+                    frames.Add(active == back ? back : front);
+                })));
+
+        group.Returned(1);
+        Assert.True(covered);
+        group.Returned(0);
+        Assert.False(covered);
+        Assert.Equal([back], frames);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void SelectionReturnHidesTheOverviewWithoutStealingExternalFocus(bool overviewOwnsFocus)
+    {
+        IntPtr active = new(overviewOwnsFocus ? 21 : 99);
+        bool hidden = false;
+        int attempts = 0;
+        var activation = new WindowActivation(_ => (1, 2), (_, _) => { },
+            _ => { attempts++; return false; }, () => active, _ => false);
+        Assert.False(activation.CompleteSelectionReturn(activation.Capture(new(51)), false,
+            new HashSet<IntPtr> { new(11), new(21) }, () => hidden = true));
+        Assert.True(hidden);
+        Assert.Equal(overviewOwnsFocus ? 1 : 0, attempts);
+    }
+
+    [Fact]
     public void NativeDesktopHasOneRequestAfterBothViewsHideAndCleanupStaysDeferred()
     {
         var desktop = new DesktopToggle();

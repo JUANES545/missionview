@@ -90,6 +90,10 @@ namespace WindowScatter
                     cursor.X == coordinator.lastHoverPosition.X && cursor.Y == coordinator.lastHoverPosition.Y) return;
                 coordinator.lastHoverPosition = cursor;
                 SelectWindow(windowHandle);
+                var previous = coordinator.searchInputView;
+                if (previous != null && previous != this && previous.SearchBox.IsKeyboardFocused &&
+                    !previous.composingSearchText && chromeWindow.IsVisible)
+                    FocusOverviewInput();
             }
         }
 

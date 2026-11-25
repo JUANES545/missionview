@@ -16,7 +16,7 @@ Press `Win+W` to open the overview. Click a window to switch to it, or press `Es
 
 ## Find your window
 
-Type part of a window title to filter the overview, including App Exposé. Matching previews stay in their slots. Press `Escape` to clear the search.
+Once the overview settles, type a window title or application name to filter it, including in App Exposé. Some apps only provide a window title. Matching previews stay in their slots. Press `Escape` to clear the search.
 
 With the search empty, hold `Space` to enlarge a live preview. Keep holding it while you navigate to preview another window.
 
@@ -52,9 +52,9 @@ Use the desktop button or `Alt+S` in the overview to show or restore the desktop
 
 Set either shortcut in **Settings → Shortcuts**. Both support `F1` through `F24` with `Win`, `Ctrl`, or `Alt`. App Exposé follows `Shift` + the overview shortcut until you assign it a separate combination. If Overview uses `Alt+Tab` or already includes `Shift`, assign App Exposé its own shortcut.
 
-Choose **Use Alt+Tab** and **Save** to replace the Windows switcher while MissionView runs. Press left `Alt+Tab` once to open Overview, select a window, then press it again to switch. Releasing Alt leaves Overview open. `Esc` cancels. This choice does not assign `Alt+Shift+Tab` to App Exposé. Save another Overview shortcut, reset to defaults and save, or quit MissionView to return left `Alt+Tab` to Windows.
+Choose **Use Alt+Tab** to replace the Windows switcher while MissionView runs. Press left `Alt+Tab` once to open Overview, select a window, then press it again to switch. Releasing Alt leaves Overview open. `Esc` cancels. This choice does not assign `Alt+Shift+Tab` to App Exposé. Choose another Overview shortcut, reset to defaults, or quit MissionView to return left `Alt+Tab` to Windows.
 
-MissionView can intercept supported occupied shortcuts while it runs. Settings shows a notice before **Save**; `Win+W` uses MissionView instead of Widgets. OS-protected shortcuts such as `Win+L` and `Ctrl+Alt+Delete` remain unavailable.
+MissionView can intercept supported occupied shortcuts while it runs. `Win+W` uses MissionView instead of Widgets. OS-protected shortcuts such as `Win+L` and `Ctrl+Alt+Delete` remain unavailable.
 
 ### Switch windows during a file drag (experimental)
 
@@ -66,6 +66,6 @@ For a supported overview shortcut that includes `Win`, MissionView masks the Win
 
 ## Make it yours
 
-Right-click the tray icon to open **Settings**. Select an info button for inline help. Choose startup, shortcuts, hot corners, thumbnail size, background dimming and a White, Blue or Mint selection border (White by default). Show the overview on all displays or only the display under the pointer; moving between displays requires all displays. Hide minimized windows from App Exposé or reduce animations. **Reset settings** loads defaults for review; **Save** applies changes and **Cancel** discards them. Check for updates from Settings or the tray; MissionView asks before starting the installer.
+Right-click the tray icon to open **Settings**. Select an info button for inline help. Choose startup, shortcuts, hot corners, thumbnail size, background dimming and a White, Blue or Mint selection border (White by default). Show the overview on all displays or only the display under the pointer; moving between displays requires all displays. **Show minimized windows in Overview** is on by default and independent of the App Exposé shelf. The shelf lists minimized windows by title and icon, without a live preview; select one to restore it. Completed changes apply as you make them. Press `Enter` to apply a new hot-corner delay. **Reset settings** asks before restoring defaults. Check for updates from Settings or the tray; MissionView asks before starting the installer.
 
 [MIT](LICENSE). Based on [miguelo96/WindowScatter](https://github.com/miguelo96/WindowScatter), via [RuoChen5251/WindowScatter](https://github.com/RuoChen5251/WindowScatter). Original copyright notices remain in LICENSE.

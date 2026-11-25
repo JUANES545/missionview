@@ -4,6 +4,24 @@ using Xunit;
 
 public sealed class AppSettingsTests : IDisposable
 {
+    [Fact]
+    public void GeneralOverviewMinimizedDefaultsOnAndAnExplicitFalsePersistsIndependently()
+    {
+        Assert.True(new AppSettings().ShowMinimizedWindowsInOverview);
+        Put(Current, Profile);
+        var settings = Store.Load();
+        Assert.True(settings.ShowMinimizedWindowsInOverview);
+        Assert.True(settings.ShowMinimizedWindows);
+        var candidate = settings.Copy();
+        candidate.ShowMinimizedWindowsInOverview = false;
+        Assert.True(new PreferencesService(settings, Store.Save).TryApply(candidate, () => { }, () => { },
+            error => throw error));
+        Assert.False(settings.ShowMinimizedWindowsInOverview);
+        var reopened = Store.Load();
+        Assert.False(reopened.ShowMinimizedWindowsInOverview);
+        Assert.True(reopened.ShowMinimizedWindows);
+    }
+
     private readonly string root = Path.Combine(Path.GetTempPath(), "MissionView-settings-tests", Guid.NewGuid().ToString("N"));
     private string Current => Path.Combine(root, "user", "settings.json");
     private string Legacy => Path.Combine(root, "exe", "settings.json");

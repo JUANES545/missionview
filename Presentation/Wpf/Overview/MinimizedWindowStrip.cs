@@ -24,15 +24,17 @@ namespace WindowScatter
         private readonly double scale, left, top;
         private readonly Action<IntPtr> select;
         private readonly Func<bool> effectsEnabled;
+        private readonly Func<string>? selectionBorderColor;
         private readonly List<MinimizedWindowButton> buttons = [];
 
         public MinimizedWindowStrip(IReadOnlyList<WindowInfo> windows, double width, double displayHeight, double scale,
             Action<IntPtr> clicked, Action<IntPtr> hovered, Func<IntPtr, ImageSource?>? readIcon = null,
-            Action<IntPtr>? selected = null, Func<bool>? effectsEnabled = null)
+            Action<IntPtr>? selected = null, Func<bool>? effectsEnabled = null, Func<string>? selectionBorderColor = null)
         {
             if (!double.IsFinite(scale) || scale <= 0) throw new ArgumentOutOfRangeException(nameof(scale));
             select = selected ?? (handle => SetSelected(handle));
             this.effectsEnabled = effectsEnabled ?? (() => true);
+            this.selectionBorderColor = selectionBorderColor;
             this.scale = scale;
             Geometry = MinimizedShelfGeometry.Calculate(width, displayHeight, windows.Count, SystemParameters.VerticalScrollBarWidth);
             left = (width - Geometry.Width) / 2;
@@ -108,6 +110,7 @@ namespace WindowScatter
                 var thumb = new WindowThumb
                 {
                     Title = window.Title,
+                    ApplicationName = window.ApplicationName,
                     WindowHandle = window.Handle, Identity = window.Identity, WasMinimized = true,
                     WasMaximized = window.WasMaximized, ClickBorder = tile, HighlightBorder = tile, TitleLabel = title,
                     TargetWidth = tile.Width * scale, TargetHeight = tile.Height * scale
@@ -231,7 +234,9 @@ namespace WindowScatter
             Resources["SelectedText"] = highContrast ? SystemColors.HighlightTextBrush : SharedBrushes.Text;
             Resources["Outline"] = highContrast ? SystemColors.HighlightTextBrush : Brushes.White;
             Resources["Focus"] = highContrast ? SystemColors.WindowTextBrush : Brushes.White;
-            foreach (var thumb in Thumbs) thumb.CloseButton?.ApplyPalette(highContrast);
+            var selectionBorder = highContrast ? SystemColors.HighlightBrush :
+                SharedBrushes.SelectionBorder(selectionBorderColor?.Invoke() ?? "White");
+            foreach (var thumb in Thumbs) thumb.CloseButton?.ApplyPalette(highContrast, selectionBorder);
         }
 
         private static Brush Brush(string value) => (Brush)new BrushConverter().ConvertFromInvariantString(value)!;

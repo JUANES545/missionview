@@ -28,7 +28,7 @@ public partial class MainWindow
     private Task<bool> ConfirmUpdateInstallation(UpdateRelease release, CancellationToken cancellation)
     {
         return Task.FromResult(UpdateConsent.Confirm(release.Version.ToString(), cancellation,
-            () => settingsWindow?.ResolveUnsavedChanges() ?? true,
+            () => settingsWindow?.IsRecordingShortcut != true,
             message => (settingsWindow != null
                 ? MessageBox.Show(settingsWindow, message, "Install update", MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.No)
                 : MessageBox.Show(message, "Install update", MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.No)) == MessageBoxResult.Yes));

@@ -129,6 +129,7 @@ namespace WindowScatter
                 var thumb = new WindowThumb
                 {
                     Title = win.Title,
+                    ApplicationName = win.ApplicationName,
                     WindowHandle = win.Handle,
                     ThumbnailHandle = thumbHandle,
                     WasMinimized = wasMinimized,
@@ -184,7 +185,7 @@ namespace WindowScatter
             var selectedBrush = highContrast ? SystemColors.HighlightBrush : SharedBrushes.SelectionBorder(selectionBorderColor());
             foreach (var thumb in windowThumbs)
             {
-                thumb.CloseButton?.ApplyPalette(highContrast);
+                thumb.CloseButton?.ApplyPalette(highContrast, selectedBrush);
                 if (thumb.HighlightBorder is { } frame)
                 {
                     frame.BorderBrush = selectedBrush;

@@ -103,18 +103,69 @@
                     </Style>
                 </TextBlock.Style>
             </TextBlock>
-            <StackPanel x:Name="SearchPanel" Canvas.Right="16" Canvas.Top="4" Panel.ZIndex="1"
-                        Background="{DynamicResource {x:Static SystemColors.WindowBrushKey}}">
-                <TextBlock x:Name="SearchLabel" Text="Search window titles" Padding="5,0,0,2"
-                           Foreground="{DynamicResource {x:Static SystemColors.WindowTextBrushKey}}"/>
-                <TextBox x:Name="SearchBox" Height="28" Padding="5,2" VerticalContentAlignment="Center"
-                         IsTabStop="False" TextChanged="SearchBox_TextChanged"
-                         AutomationProperties.Name="Search window titles"
-                         AutomationProperties.HelpText="Type to filter. Use Tab or arrow keys to select a result, Enter to switch, and Escape to clear."/>
-                <TextBlock x:Name="NoSearchResults" Text="No matching windows" Visibility="Collapsed"
-                           FontSize="11" Padding="5,0" IsHitTestVisible="False"
-                           Foreground="{DynamicResource {x:Static SystemColors.WindowTextBrushKey}}"
-                           AutomationProperties.LiveSetting="Polite"/>
+            <StackPanel x:Name="SearchPanel" Panel.ZIndex="1" ClipToBounds="True"
+                        Visibility="Collapsed" Opacity="0" IsHitTestVisible="False">
+                <StackPanel.Resources>
+                    <Style x:Key="SearchSurface" TargetType="Border">
+                        <Setter Property="Background" Value="#292A2E"/>
+                        <Setter Property="BorderBrush" Value="#797B85"/>
+                        <Style.Triggers>
+                            <Trigger Property="IsKeyboardFocusWithin" Value="True">
+                                <Setter Property="BorderBrush" Value="#E4E6ED"/>
+                            </Trigger>
+                            <DataTrigger Binding="{Binding Path=(SystemParameters.HighContrast)}" Value="True">
+                                <Setter Property="Background" Value="{DynamicResource {x:Static SystemColors.WindowBrushKey}}"/>
+                                <Setter Property="BorderBrush" Value="{DynamicResource {x:Static SystemColors.WindowTextBrushKey}}"/>
+                            </DataTrigger>
+                            <MultiDataTrigger>
+                                <MultiDataTrigger.Conditions>
+                                    <Condition Binding="{Binding Path=(SystemParameters.HighContrast)}" Value="True"/>
+                                    <Condition Binding="{Binding RelativeSource={RelativeSource Self}, Path=IsKeyboardFocusWithin}" Value="True"/>
+                                </MultiDataTrigger.Conditions>
+                                <Setter Property="BorderBrush" Value="{DynamicResource {x:Static SystemColors.HighlightBrushKey}}"/>
+                            </MultiDataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </StackPanel.Resources>
+                <Border Style="{StaticResource SearchSurface}" CornerRadius="12" BorderThickness="2" Padding="10,0" MinHeight="48">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <Path Width="18" Height="18" Stretch="Uniform" VerticalAlignment="Center"
+                              Stroke="{Binding Path=(TextElement.Foreground), RelativeSource={RelativeSource AncestorType=Canvas}}"
+                              StrokeThickness="2" StrokeEndLineCap="Round" IsHitTestVisible="False"
+                              Data="M15,9 A6,6 0 1 1 3,9 A6,6 0 1 1 15,9 M13.5,13.5 L19,19"/>
+                        <local:OverviewSearchBox x:Name="SearchBox" Grid.Column="1" FontSize="18" Padding="8,0"
+                                 Background="Transparent" BorderThickness="0" VerticalContentAlignment="Center"
+                                 Foreground="{Binding Path=(TextElement.Foreground), RelativeSource={RelativeSource AncestorType=Canvas}}"
+                                 CaretBrush="{Binding Foreground, RelativeSource={RelativeSource Self}}"
+                                 IsTabStop="False" TextChanged="SearchBox_TextChanged"
+                                 AutomationProperties.Name="Search windows by title or application"
+                                 AutomationProperties.HelpText="Type to filter. Use Tab or arrow keys to select a result, Enter to switch, and Escape to clear."/>
+                        <Border Grid.Column="2" CornerRadius="4" Padding="6,2" VerticalAlignment="Center"
+                                IsHitTestVisible="False">
+                            <Border.Style>
+                                <Style TargetType="Border">
+                                    <Setter Property="Background" Value="#3A3B41"/>
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding Path=(SystemParameters.HighContrast)}" Value="True">
+                                            <Setter Property="Background" Value="{DynamicResource {x:Static SystemColors.WindowBrushKey}}"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </Border.Style>
+                            <TextBlock Text="Esc" FontSize="12"/>
+                        </Border>
+                    </Grid>
+                </Border>
+                <Border Style="{StaticResource SearchSurface}" CornerRadius="6" Margin="0,5,0,0" IsHitTestVisible="False"
+                        Visibility="{Binding ElementName=SearchStatusText, Path=Visibility}">
+                    <TextBlock x:Name="SearchStatusText" Visibility="Collapsed" TextAlignment="Center"
+                               FontSize="13" Padding="4" TextWrapping="Wrap" AutomationProperties.LiveSetting="Polite"/>
+                </Border>
             </StackPanel>
         </Canvas>
     </Canvas>

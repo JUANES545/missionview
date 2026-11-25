@@ -55,14 +55,35 @@ namespace WindowScatter
             using var process = OpenProcess(0x1000, false, target.ProcessId); // QUERY_LIMITED_INFORMATION
             if (process.IsInvalid)
                 throw new Win32Exception(Marshal.GetLastWin32Error(), "The active application's identity could not be read.");
-            var path = new StringBuilder(32768);
-            uint length = (uint)path.Capacity;
-            if (!QueryFullProcessImageName(process, 0, path, ref length))
+            if (ReadExecutablePath(process) is not { } path)
                 throw new Win32Exception(Marshal.GetLastWin32Error(), "The application's executable could not be identified.");
             string? processAppId = windowAppId == null ? ReadProcessAppId(process) : null;
-            var identity = ApplicationIdentity.Create(path.ToString(), windowAppId, processAppId);
+            var identity = ApplicationIdentity.Create(path, windowAppId, processAppId);
             Validate(target);
             return identity;
+        }
+
+        private static string? ReadExecutablePath(SafeProcessHandle process)
+        {
+            var path = new StringBuilder(32768);
+            uint length = (uint)path.Capacity;
+            return QueryFullProcessImageName(process, 0, path, ref length) ? path.ToString() : null;
+        }
+
+        internal static string? ReadApplicationName(uint processId)
+        {
+            using var process = OpenProcess(0x1000, false, processId);
+            if (process.IsInvalid || ReadExecutablePath(process) is not { } path ||
+                path.StartsWith(@"\\", StringComparison.Ordinal) || ApplicationIdentity.IsSharedHost(path)) return null;
+            try
+            {
+                string? name = System.Diagnostics.FileVersionInfo.GetVersionInfo(path).FileDescription?.Trim();
+                return string.IsNullOrWhiteSpace(name) ? null : name;
+            }
+            catch (Exception error) when (error is System.IO.IOException or UnauthorizedAccessException or Win32Exception)
+            {
+                return null; // Version metadata is optional; the title remains searchable.
+            }
         }
 
         private static void Validate(WindowActivationTarget target)

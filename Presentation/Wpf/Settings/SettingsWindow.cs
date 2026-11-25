@@ -5,6 +5,7 @@ using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Automation.Peers;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Data;
 using System.Windows.Documents;
 using System.Windows.Input;
@@ -35,6 +36,7 @@ internal sealed class SettingsWindow : Window
     private readonly Slider dimming = new() { Minimum = 0, Maximum = 100, TickFrequency = 5,
         SmallChange = 1, LargeChange = 10, IsMoveToPointEnabled = true };
     private readonly CheckBox minimized = new() { Content = "Show minimized windows in App Exposé" };
+    private readonly CheckBox overviewMinimized = new() { Content = "Show minimized windows in Overview" };
     private readonly CheckBox reduceAnimations = new() { Content = "Reduce animations" };
     private readonly TextBox delay = new();
     private readonly CheckBox startup = new() { Content = "Start with Windows" };
@@ -44,12 +46,9 @@ internal sealed class SettingsWindow : Window
     private readonly TabControl categories = new();
     private readonly List<Grid> preferenceRows = [];
     private readonly List<(Button Button, TextBlock Detail)> contextualHelp = [];
-    private readonly Button saveButton = new();
-    private readonly Button cancelButton = new();
     private string hotkey;
     private string? appExposeHotkey;
-    private bool shortcutWarning;
-    private bool resetDraft;
+    private bool syncingControls;
     internal bool IsRecordingShortcut { get; private set; }
     internal int RecordingGeneration { get; private set; }
 
@@ -64,7 +63,7 @@ internal sealed class SettingsWindow : Window
             using var process = Process.Start(new ProcessStartInfo(address.AbsoluteUri) { UseShellExecute = true });
         });
         this.confirmReset = confirmReset ?? (() => MessageBox.Show(this,
-            "Reset all settings to their defaults?\n\nChanges apply only when you save.", "Reset settings",
+            "Reset all settings to their defaults?", "Reset settings",
             MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.No) == MessageBoxResult.Yes);
         hotkey = source.Hotkey;
         appExposeHotkey = source.AppExposeHotkey;
@@ -102,29 +101,7 @@ internal sealed class SettingsWindow : Window
         feedback.Style = feedbackStyle;
         footer.Children.Add(new ScrollViewer { Content = feedback, MaxHeight = 84,
             VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled });
-        var actions = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
-        var cancel = cancelButton;
-        cancel.Content = "Cancel";
-        cancel.IsCancel = true;
-        cancel.MinWidth = 88;
-        cancel.Click += (_, _) => Close();
-        var save = saveButton;
-        save.Content = "Save";
-        save.MinWidth = 88;
-        save.Margin = new Thickness(8, 8, 0, 0);
-        if (!SystemParameters.HighContrast)
-        {
-            save.Background = SharedBrushes.Mint;
-            save.Foreground = SharedBrushes.Graphite;
-        }
-        cancel.Margin = new Thickness(0, 8, 0, 0);
-        save.Click += (_, _) => Save();
-        actions.Children.Add(cancel);
-        actions.Children.Add(save);
-        footer.Children.Add(actions);
         KeyboardNavigation.SetTabIndex(footer, 100);
-        KeyboardNavigation.SetTabIndex(cancel, 0);
-        KeyboardNavigation.SetTabIndex(save, 1);
         var body = new DockPanel { VerticalAlignment = VerticalAlignment.Top };
         var bodyScroll = new ScrollViewer { Content = body, VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
             HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled, Focusable = false,
@@ -183,22 +160,25 @@ internal sealed class SettingsWindow : Window
         AddPreference(general, "Background dimming", dimming,
             "Dim the desktop behind window previews, from 0 to 100 percent. High contrast uses an opaque Windows background.");
         minimized.IsChecked = source.ShowMinimizedWindows;
+        overviewMinimized.IsChecked = source.ShowMinimizedWindowsInOverview;
+        AddPreference(general, "Minimized in Overview", overviewMinimized,
+            "List minimized windows in a separate shelf. Select a window to restore it.");
         AddPreference(general, "Minimized windows", minimized,
-            "Include minimized windows in the App Exposé shelf. The general overview shows open windows only.");
+            "Include minimized windows from the application under the pointer in the App Exposé shelf.");
         reduceAnimations.IsChecked = source.ReduceAnimations;
         AddPreference(general, "Animations", reduceAnimations,
             "Open, close and enlarge previews without animated movement. Windows reduced-motion settings also apply.");
         var reset = new Button { Content = "Reset settings" };
         reset.Click += (_, _) =>
         {
-            if (this.confirmReset()) RestorePreferences(new AppSettings());
+            if (this.confirmReset()) ApplyCompletedChange(new AppSettings(), reset: true);
         };
         AddPreference(general, "Reset settings", reset,
-            "Restore defaults in this settings window. Save applies them; Cancel keeps your current settings.");
-        AddPreference(shortcuts, "Overview shortcut", shortcut, "Record a shortcut with Ctrl, Alt or Win. Press Escape to cancel recording. Changes apply when you save.");
+            "Restore the default preferences after confirmation.");
+        AddPreference(shortcuts, "Overview shortcut", shortcut, "Record a shortcut with Ctrl, Alt or Win. Press Escape to cancel recording.");
         var useAltTab = new Button { Content = "Use Alt+Tab" };
         AddPreference(shortcuts, "Windows switcher", useAltTab,
-            "Use left Alt+Tab for Overview instead of the Windows switcher while MissionView is running. Changes apply when you save.");
+            "Use left Alt+Tab for Overview instead of the Windows switcher while MissionView is running.");
         AutomationProperties.SetName(useAltTab, "Use Alt+Tab");
         useAltTab.Click += (_, _) =>
         {
@@ -208,8 +188,7 @@ internal sealed class SettingsWindow : Window
                 ReportRecordingError(error);
                 return;
             }
-            hotkey = "Alt+Tab";
-            RefreshShortcutHint();
+            if (source.Hotkey != "Alt+Tab") Change(p => p.Hotkey = "Alt+Tab");
         };
         AddPreference(shortcuts, "App Exposé shortcut", appExposeShortcut, "Open windows from the application under the pointer. Record a separate shortcut with Ctrl, Alt or Win. By default this follows Overview with Shift, except when Overview uses Alt+Tab.");
         foreach (var recorder in new[] { shortcut, appExposeShortcut })
@@ -254,7 +233,7 @@ internal sealed class SettingsWindow : Window
         AddPreference(corners, "Corner", position);
         delay.Text = source.HotCornerDelay.ToString(CultureInfo.CurrentCulture);
         delay.TextChanged += (_, _) => delay.Tag = null;
-        AddPreference(corners, "Delay (milliseconds)", delay);
+        AddPreference(corners, "Delay (milliseconds)", delay, "Enter zero or more milliseconds, then press Enter to apply.");
         void SetCornerEnabled()
         {
             position.IsEnabled = delay.IsEnabled = hotCorners.IsChecked == true;
@@ -282,6 +261,7 @@ internal sealed class SettingsWindow : Window
             CollapseContextualHelp();
         };
         categories.SizeChanged += (_, _) => ReflowPreferences();
+        BindCompletedChanges();
         SystemParameters.StaticPropertyChanged += RefreshSystemPalette;
         Closed += (_, _) =>
         {
@@ -394,12 +374,11 @@ internal sealed class SettingsWindow : Window
             Background = SystemParameters.HighContrast ? SystemColors.WindowBrush : SharedBrushes.Graphite;
             Foreground = SystemParameters.HighContrast ? SystemColors.WindowTextBrush : SharedBrushes.Text;
             hotCorners.Foreground = startup.Foreground = minimized.Foreground = reduceAnimations.Foreground = Foreground;
+            overviewMinimized.Foreground = Foreground;
             categories.Background = Background;
             categories.Foreground = Foreground;
             foreach (var row in preferenceRows)
                 ((Label)row.Children[0]).Foreground = Foreground;
-            saveButton.Background = SystemParameters.HighContrast ? SystemColors.ControlBrush : SharedBrushes.Mint;
-            saveButton.Foreground = SystemParameters.HighContrast ? SystemColors.ControlTextBrush : SharedBrushes.Graphite;
             ApplyControlStyles();
             ApplyNativeCaption(SystemParameters.HighContrast);
         });
@@ -497,7 +476,7 @@ internal sealed class SettingsWindow : Window
             {
                 "Startup" => "\uE7E8", "Selection border" => "\uE790", "Overview shortcut" => "\uE8A7", "App Exposé shortcut" => "\uE737",
                 "Overview displays" => "\uE7F4", "Thumbnail size" => "\uE8A7", "Background dimming" => "\uE706",
-                "Minimized windows" => "\uE921", "Animations" => "\uE768", "Reset settings" => "\uE777",
+                "Minimized windows" or "Minimized in Overview" => "\uE921", "Animations" => "\uE768", "Reset settings" => "\uE777",
                 "Activation" => "\uE7C9", "Corner" => "\uE745", _ => "\uE916"
             },
             FontFamily = new FontFamily("Segoe Fluent Icons, Segoe MDL2 Assets"), FontSize = 16,
@@ -695,12 +674,9 @@ internal sealed class SettingsWindow : Window
         }
         string effective = pair.AppExpose is { } app ? ShortcutText(app) : "Record shortcut...";
         appExposeShortcut.Content = appExposeHotkey ?? effective;
-        bool changed = hotkey != source.Hotkey || appExposeHotkey != source.AppExposeHotkey;
         exposeHint.Text = pair.AppExpose == null
             ? "App Exposé unavailable. Record an independent shortcut."
-            : changed
-                ? appExposeHotkey == null ? "Follows Overview. Save to check availability." : "Save to check availability."
-                : isAppExposeAvailable()
+            : isAppExposeAvailable()
                     ? appExposeHotkey == null ? "Follows Overview" : ""
                     : "App Exposé is unavailable: Windows could not reserve both shortcuts. Choose another shortcut.";
         exposeHint.Visibility = exposeHint.Text.Length == 0 ? Visibility.Collapsed : Visibility.Visible;
@@ -744,7 +720,6 @@ internal sealed class SettingsWindow : Window
 
     internal void ReportShortcutWarning(string warning)
     {
-        shortcutWarning = true;
         feedback.Tag = "Error";
         feedback.Text = warning;
         UIElementAutomationPeer.FromElement(feedback)?.RaiseAutomationEvent(AutomationEvents.LiveRegionChanged);
@@ -793,9 +768,9 @@ internal sealed class SettingsWindow : Window
             ReportRecordingError("Choose a shortcut without Shift, or record an independent App Exposé shortcut first.");
             return;
         }
-        if (appRecording) appExposeHotkey = value;
-        else hotkey = unchanged ? source.Hotkey : value;
         StopRecording();
+        if (appRecording && source.AppExposeHotkey != value) Change(p => p.AppExposeHotkey = value);
+        else if (!appRecording && !unchanged) Change(p => p.Hotkey = value);
     }
 
     internal void RecordVirtualKey(int virtualKey, int modifiers, bool isKeyDown)
@@ -811,104 +786,110 @@ internal sealed class SettingsWindow : Window
         RecordShortcut(KeyInterop.KeyFromVirtualKey(virtualKey), keys);
     }
 
-    internal bool ResolveUnsavedChanges()
+    internal void RefreshStartupPreference()
     {
-        bool unchanged = hotkey == source.Hotkey && appExposeHotkey == source.AppExposeHotkey && hotCorners.IsChecked == source.EnableHotCorners
-            && ((string)((ComboBoxItem)position.SelectedItem).Tag).Equals(source.HotCornerPosition, StringComparison.OrdinalIgnoreCase)
-            && int.TryParse(delay.Text, out int milliseconds) && milliseconds == source.HotCornerDelay
-            && selectionBorder.SelectedItem is ComboBoxItem border && ((string)border.Tag).Equals(source.SelectionBorderColor, StringComparison.OrdinalIgnoreCase)
-            && (string?)((ComboBoxItem?)overviewMonitors.SelectedItem)?.Tag == source.OverviewMonitorScope
-            && (string?)((ComboBoxItem?)thumbnailSize.SelectedItem)?.Tag == source.ThumbnailSize
-            && dimming.Value == source.BackgroundDimming && minimized.IsChecked == source.ShowMinimizedWindows
-            && reduceAnimations.IsChecked == source.ReduceAnimations
-            && startup.IsChecked == source.RunOnStartup;
-        if (unchanged && !IsRecordingShortcut && !resetDraft) return true;
-        var choice = MessageBox.Show(this, "Save your settings before installing the update?\n\nChoose No to discard these changes.",
-            "Unsaved settings", MessageBoxButton.YesNoCancel, MessageBoxImage.Question, MessageBoxResult.Cancel);
-        if (choice == MessageBoxResult.Yes) return Save(closeOnSuccess: false);
-        if (choice != MessageBoxResult.No) return false;
-        RestorePreferences();
-        return true;
+        bool wasSyncing = syncingControls;
+        syncingControls = true;
+        try { startup.IsChecked = source.RunOnStartup; }
+        finally { syncingControls = wasSyncing; }
     }
 
-    internal void RefreshStartupPreference() => startup.IsChecked = source.RunOnStartup;
-
-    private bool Save(bool closeOnSuccess = true)
+    private void BindCompletedChanges()
     {
-        if (IsRecordingShortcut)
+        void Check(CheckBox control, Action<AppSettings, bool> set)
         {
-            categories.SelectedIndex = 1;
-            ReportRecordingError("Finish recording a shortcut or press Escape to cancel recording.");
-            (activeRecorder ?? shortcut).Focus();
-            return false;
+            control.Checked += (_, _) => Change(p => set(p, true));
+            control.Unchecked += (_, _) => Change(p => set(p, false));
         }
-        if (!int.TryParse(delay.Text, out int milliseconds) || milliseconds < 0)
+        void Choose(ComboBox control, Action<AppSettings, string> set)
         {
-            categories.SelectedIndex = 2;
-            delay.Tag = "Invalid";
-            feedback.Tag = "Error";
-            feedback.Text = "Enter a delay of zero or more milliseconds.";
-            delay.Focus();
-            return false;
+            control.SelectionChanged += (_, _) =>
+            {
+                if (control.SelectedItem is ComboBoxItem { Tag: string value }) Change(p => set(p, value));
+            };
         }
-        var candidate = resetDraft ? new AppSettings() : source.Copy();
-        candidate.Hotkey = hotkey;
-        candidate.AppExposeHotkey = appExposeHotkey;
-        if (!OverviewShortcutPair.TryParse(candidate.Hotkey, candidate.AppExposeHotkey, out _, out string shortcutError))
+        Check(hotCorners, (p, value) => p.EnableHotCorners = value);
+        Check(minimized, (p, value) => p.ShowMinimizedWindows = value);
+        Check(overviewMinimized, (p, value) => p.ShowMinimizedWindowsInOverview = value);
+        Check(reduceAnimations, (p, value) => p.ReduceAnimations = value);
+        Check(startup, (p, value) => p.RunOnStartup = value);
+        Choose(position, (p, value) => p.HotCornerPosition = value);
+        Choose(selectionBorder, (p, value) => p.SelectionBorderColor = value);
+        Choose(overviewMonitors, (p, value) => p.OverviewMonitorScope = value);
+        Choose(thumbnailSize, (p, value) => p.ThumbnailSize = value);
+        bool dragging = false;
+        void CommitDimming()
         {
-            categories.SelectedIndex = 1;
-            feedback.Tag = "Error";
-            feedback.Text = shortcutError;
-            shortcut.Focus();
-            return false;
+            if (dimming.Value != source.BackgroundDimming) Change(p => p.BackgroundDimming = dimming.Value);
         }
-        candidate.EnableHotCorners = hotCorners.IsChecked == true;
-        candidate.HotCornerPosition = (string)((ComboBoxItem)position.SelectedItem).Tag;
-        candidate.HotCornerDelay = milliseconds;
-        candidate.RunOnStartup = startup.IsChecked == true;
-        if (selectionBorder.SelectedItem is not ComboBoxItem selectedBorder)
+        dimming.AddHandler(Thumb.DragStartedEvent, new DragStartedEventHandler((_, _) => dragging = true));
+        dimming.AddHandler(Thumb.DragCompletedEvent, new DragCompletedEventHandler((_, e) =>
         {
-            categories.SelectedIndex = 0;
-            feedback.Tag = "Error";
-            feedback.Text = "Choose White, Blue or Mint for the selection border.";
-            selectionBorder.Focus();
-            return false;
-        }
-        candidate.SelectionBorderColor = (string)selectedBorder.Tag;
-        if (overviewMonitors.SelectedItem is not ComboBoxItem selectedMonitor || thumbnailSize.SelectedItem is not ComboBoxItem selectedSize)
+            dragging = false;
+            if (!e.Canceled) CommitDimming();
+            else
+            {
+                syncingControls = true;
+                try { dimming.Value = source.BackgroundDimming; }
+                finally { syncingControls = false; }
+            }
+        }));
+        dimming.ValueChanged += (_, _) => { if (!dragging) CommitDimming(); };
+        delay.PreviewKeyDown += (_, e) =>
         {
-            categories.SelectedIndex = 0;
-            feedback.Tag = "Error";
-            feedback.Text = "Choose an overview display scope and thumbnail size.";
-            (overviewMonitors.SelectedItem == null ? overviewMonitors : thumbnailSize).Focus();
-            return false;
-        }
-        candidate.OverviewMonitorScope = (string)selectedMonitor.Tag;
-        candidate.ThumbnailSize = (string)selectedSize.Tag;
-        candidate.BackgroundDimming = dimming.Value;
-        candidate.ShowMinimizedWindows = minimized.IsChecked == true;
-        candidate.ReduceAnimations = reduceAnimations.IsChecked == true;
-        shortcutWarning = false;
-        feedback.Text = "";
-        if (apply(candidate))
+            if (e.Key != Key.Enter) return;
+            e.Handled = true;
+            CommitDelay();
+        };
+    }
+
+    internal void CommitDelay()
+    {
+        if (int.TryParse(delay.Text, out int milliseconds) && milliseconds >= 0)
         {
-            RefreshShortcutHint();
-            if (closeOnSuccess && !shortcutWarning) Close();
-            return true;
+            if (milliseconds != source.HotCornerDelay) Change(p => p.HotCornerDelay = milliseconds);
+            else { delay.Tag = null; feedback.Text = ""; }
         }
         else
         {
-            RestorePreferences();
-            feedback.Tag = "Error";
-            feedback.Text = "Settings were not applied. Previous preferences are shown; review the error before trying again.";
-            return false;
+            categories.SelectedIndex = 2;
+            delay.Tag = "Invalid";
+            ReportShortcutWarning("Enter a delay of zero or more milliseconds.");
         }
     }
 
-    private void RestorePreferences(AppSettings? defaults = null)
+    private void Change(Action<AppSettings> edit)
     {
-        var preferences = defaults ?? source;
-        resetDraft = defaults != null;
+        if (syncingControls) return;
+        var candidate = source.Copy();
+        edit(candidate);
+        ApplyCompletedChange(candidate);
+    }
+
+    private void ApplyCompletedChange(AppSettings candidate, bool reset = false)
+    {
+        syncingControls = true;
+        try
+        {
+            feedback.Text = "";
+            bool applied = apply(candidate);
+            string message = feedback.Text;
+            if (!applied || reset) RestorePreferences();
+            else
+            {
+                hotkey = source.Hotkey;
+                appExposeHotkey = source.AppExposeHotkey;
+                RefreshShortcutHint();
+            }
+            if (!applied || message.Length != 0)
+                ReportShortcutWarning(!applied ? "Settings were not applied. Previous preferences are shown." : message);
+        }
+        finally { syncingControls = false; }
+    }
+
+    private void RestorePreferences()
+    {
+        var preferences = source;
         hotkey = preferences.Hotkey;
         appExposeHotkey = preferences.AppExposeHotkey;
         StopRecording();
@@ -922,6 +903,7 @@ internal sealed class SettingsWindow : Window
         SelectItem(thumbnailSize, preferences.ThumbnailSize);
         dimming.Value = preferences.BackgroundDimming;
         minimized.IsChecked = preferences.ShowMinimizedWindows;
+        overviewMinimized.IsChecked = preferences.ShowMinimizedWindowsInOverview;
         reduceAnimations.IsChecked = preferences.ReduceAnimations;
         startup.IsChecked = preferences.RunOnStartup;
     }

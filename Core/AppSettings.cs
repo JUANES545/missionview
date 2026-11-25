@@ -13,6 +13,7 @@ namespace WindowScatter
         public string SelectionBorderColor { get; set; } = "White";
         public string OverviewMonitorScope { get; set; } = "All";
         public bool ShowMinimizedWindows { get; set; } = true;
+        public bool ShowMinimizedWindowsInOverview { get; set; } = true;
         public string ThumbnailSize { get; set; } = "Standard";
         public double BackgroundDimming { get; set; } = 160d / 255 * 100;
         public bool ReduceAnimations { get; set; }
@@ -57,6 +58,7 @@ namespace WindowScatter
             SelectionBorderColor = source.SelectionBorderColor;
             OverviewMonitorScope = source.OverviewMonitorScope;
             ShowMinimizedWindows = source.ShowMinimizedWindows;
+            ShowMinimizedWindowsInOverview = source.ShowMinimizedWindowsInOverview;
             ThumbnailSize = source.ThumbnailSize;
             BackgroundDimming = source.BackgroundDimming;
             ReduceAnimations = source.ReduceAnimations;
