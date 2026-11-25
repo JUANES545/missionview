@@ -1,3 +1,4 @@
+using System.Reflection;
 using System.Runtime.ExceptionServices;
 using System.Windows;
 using System.Windows.Automation;
@@ -13,6 +14,51 @@ using Xunit;
 
 public class MainWindowNavigationTests
 {
+    [Theory]
+    [InlineData(1, true)]
+    [InlineData(2, false)]
+    public void FileDragIntakeStartsOnlyWithOneDisplay(int displays, bool armed) => RunSta(() =>
+    {
+        using var app = new MainWindow();
+        app.BeginFixtureFileDrag(displays);
+        Assert.Equal(armed, app.FileDragArmed);
+        Assert.Equal(armed, app.FileDragRoutesDropEvents);
+    });
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void FileDragCanReturnAfterLeavingButNotAfterDropping(bool dropped) => RunSta(() =>
+    {
+        using var app = new MainWindow();
+        var target = app.AddThumb(10, 0, 0, 100, 100).Identity;
+        app.BeginFixtureFileDrag(1);
+        app.HoverFixtureFileDrag(target);
+        Assert.Equal(target.Handle, app.Selected);
+
+        var result = app.EndFixtureFileDrag(dropped ? DragDrop.PreviewDropEvent : DragDrop.PreviewDragLeaveEvent);
+
+        Assert.Equal((true, DragDropEffects.None), result);
+        Assert.Equal(IntPtr.Zero, app.Selected);
+        app.HoverFixtureFileDrag(target);
+        Assert.Equal(dropped ? IntPtr.Zero : target.Handle, app.Selected);
+        Assert.Equal(0, app.ActivationRequests);
+    });
+
+    [Fact]
+    public void FileDragDoesNotExposeOrdinaryThumbnailInputAfterTheSourceReleases() => RunSta(() =>
+    {
+        using var app = new MainWindow();
+        Assert.False(app.BlocksFixtureThumbnailInput);
+        app.BeginFixtureFileDrag(1);
+        var target = app.AddThumb(10, 0, 0, 100, 100).Identity;
+        app.HoverFixtureFileDrag(target);
+        app.EndFixtureFileDrag(DragDrop.PreviewDropEvent);
+        Assert.True(app.BlocksFixtureThumbnailInput);
+        app.ResetFixtureFileDrag();
+        Assert.False(app.BlocksFixtureThumbnailInput);
+    });
+
     [Fact]
     public void SyntheticSearchSkipsHiddenShelfSlotsWithoutRepackingAndRestoresTabOrder()
         => RunSta(() =>
@@ -743,6 +789,13 @@ namespace WindowScatter
         internal IReadOnlyList<MonitorHelper.MonitorBounds> Topology => monitors;
         internal bool SessionShowsMinimized => showMinimizedWindows;
         internal IEnumerable<IntPtr> FixtureHandles => sources.Prepend(this).Select(w => new WindowInteropHelper(w).Handle);
+        private bool chromeClosed => false;
+        private IntPtr chromeHandle => throw new NotSupportedException();
+        private WindowActivation windowActivation => throw new NotSupportedException();
+        private WindowClose windowClose => throw new NotSupportedException();
+        internal bool FileDragArmed => fileDrag != null;
+        internal bool FileDragRoutesDropEvents => chromeWindow.AllowDrop;
+        internal bool BlocksFixtureThumbnailInput => BlocksThumbnailInput;
 
         internal MainWindow(MainWindow? parent = null, int left = 0, int top = 0, int width = 1600, int height = 1000, double dpi = 1)
         {
@@ -768,6 +821,31 @@ namespace WindowScatter
         }
 
         private void InitializeRendering() { }
+        private void HideAllViews() => throw new NotSupportedException();
+        private void QueueOverviewCleanup() => throw new NotSupportedException();
+
+        internal void BeginFixtureFileDrag(int displayCount)
+        {
+            monitors = Enumerable.Range(1, displayCount)
+                .Select(id => new MonitorHelper.MonitorBounds { Handle = new(id) }).ToList();
+            BeginFileDrag(default);
+        }
+
+        internal void HoverFixtureFileDrag(WindowActivationTarget target) => SetFileDragHover(target);
+        internal void ResetFixtureFileDrag() => ResetFileDrag();
+
+        internal (bool Handled, DragDropEffects Effect) EndFixtureFileDrag(RoutedEvent routedEvent)
+        {
+            var constructor = typeof(DragEventArgs).GetConstructor(BindingFlags.Instance | BindingFlags.NonPublic, null,
+                [typeof(IDataObject), typeof(DragDropKeyStates), typeof(DragDropEffects), typeof(DependencyObject), typeof(Point)],
+                null)!;
+            var args = (DragEventArgs)constructor.Invoke(
+                [new DataObject(), DragDropKeyStates.None, DragDropEffects.Copy, chromeWindow, new Point()]);
+            args.RoutedEvent = routedEvent;
+            EndFileDragHover(chromeWindow, args);
+            return (args.Handled, args.Effects);
+        }
+
         private void ConfigureCloseInput(WindowThumb thumb) { }
         private void RestorePendingCloseStatus() { }
         internal void RefreshPresentation(bool highContrast, bool systemAnimation) => RefreshOverviewPresentation(highContrast, systemAnimation);

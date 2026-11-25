@@ -54,6 +54,12 @@ Set either shortcut in **Settings → Shortcuts**. App Exposé follows `Shift` +
 
 MissionView can intercept supported occupied shortcuts while it runs. Settings shows a notice before **Save**; `Win+W` uses MissionView instead of Widgets. OS-protected shortcuts such as `Win+L` and `Ctrl+Alt+Delete` remain unavailable.
 
+### Switch windows during a file drag (experimental)
+
+On one display, start dragging a disposable test file in Explorer with the left mouse button and keep it held. Press your overview shortcut, wait for the previews to settle, then move onto the body of a non-minimized window preview on the current virtual desktop. Hover highlights the preview without switching. Press the same shortcut again while still holding the button, then move to the real destination and release there.
+
+MissionView checks only for the file-drop format and never accepts the drop. Press `Escape` to cancel. If you release over the overview, press the shortcut again to close it without switching. On multiple displays, the shortcut opens the standard overview instead. App Exposé and swapped mouse buttons are outside this prototype. Windows must deliver the shortcut and drag events during the Explorer drag and allow the target to take focus; the target app decides whether it accepts the file.
+
 ## Make it yours
 
 Right-click the tray icon to open **Settings**. Select an info button for inline help. Choose startup, shortcuts, hot corners, thumbnail size, background dimming and a White, Blue or Mint selection border (White by default). Show the overview on all displays or only the display under the pointer; moving between displays requires all displays. Hide minimized windows from App Exposé or reduce animations. **Reset settings** loads defaults for review; **Save** applies changes and **Cancel** discards them. Check for updates from Settings or the tray; MissionView asks before starting the installer.

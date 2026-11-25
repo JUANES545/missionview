@@ -112,6 +112,7 @@ namespace WindowScatter
             AccessKeyManager.Register("S", DesktopButton);
             RenderCanvas.Children.Remove(ChromeCanvas);
             chromeWindow = new OverviewChromeWindow(this, ChromeCanvas);
+            ConfigureFileDragInput();
             chromeWindow.PreviewKeyDown += Window_KeyDown;
             chromeWindow.PreviewKeyUp += Window_KeyUp;
             chromeWindow.Deactivated += (_, _) => Dispatcher.BeginInvoke(new Action(() =>
@@ -193,7 +194,11 @@ namespace WindowScatter
             helper.EnsureHandle();
 
             animationManager = new WindowAnimationManager(windowThumbs);
-            thumbnailManager = new ThumbnailManager(ScatterCanvas, windowThumbs, helper.Handle, OnWindowClicked, OnWindowHovered,
+            thumbnailManager = new ThumbnailManager(ScatterCanvas, windowThumbs, helper.Handle, OnWindowClicked,
+                handle =>
+                {
+                    if (!BlocksThumbnailInput) OnWindowHovered(handle);
+                },
                 selectionBorderColor: () => settings.SelectionBorderColor, effectsEnabled: () => !settings.ReduceAnimations);
             RefreshOverviewPresentation(SystemParameters.HighContrast, SystemParameters.ClientAreaAnimation);
             thumbnailManager.ConfigureInput = ConfigureThumbnailInput;
@@ -323,18 +328,38 @@ namespace WindowScatter
                     var input = shortcutInput.Process(key, down, recording, overviewHotkeys, injected);
                     if (recording && !injected)
                         RecordOverviewShortcutKey(key, input.Modifiers, down);
+                    if (!injected && !recording && down && key == VK_ESCAPE && fileDrag is { Cancelled: false } canceled)
+                    {
+                        canceled.Cancel();
+                        Dispatcher.BeginInvoke(new Action(() =>
+                        {
+                            if (ReferenceEquals(fileDrag, canceled)) DismissFileDrag(null);
+                        }));
+                    }
                     if (input.Suppress)
                     {
-                        if (input.MaskMenus)
+                        var fileDragAtPress = input.AppExpose ? null : fileDrag;
+                        bool primaryHeld = !input.AppExpose && input.Activate && !drag.IsPressed && IsFileDragButtonDown();
+                        if (input.MaskMenus && !primaryHeld && fileDrag == null)
                             KeyboardMenuMask.TrySend(SendInput);
                         if (input.Activate)
                         {
                             int revision = overviewHotkeys?.Revision ?? -1;
+                            int generation = scatterInteraction.Generation;
+                            var hover = fileDragAtPress?.Current;
                             this.Dispatcher.BeginInvoke(new Action(async () =>
                             {
                                 if (isClosing || overviewHotkeys?.Revision != revision) return;
                                 if (input.AppExpose) await ToggleAppExposeAsync(input.Foreground, input.ApplicationWindow, input.CaptureError);
-                                else await ToggleScatterAsync();
+                                else if (drag.IsPressed) await ToggleScatterAsync();
+                                else if (fileDragAtPress != null) ConfirmFileDrag(fileDragAtPress, hover, primaryHeld);
+                                else if (primaryHeld)
+                                {
+                                    if (generation == scatterInteraction.Generation && !scatterInteraction.IsOpen &&
+                                        !desktopToggle.RestorePending)
+                                        await ToggleScatterAsync(openingWithFileDrag: true);
+                                }
+                                else if (fileDrag == null) await ToggleScatterAsync();
                             }));
                         }
                         return (IntPtr)1;
@@ -490,11 +515,12 @@ namespace WindowScatter
             }
         }
 
-        private async System.Threading.Tasks.Task ToggleScatterAsync()
+        private async System.Threading.Tasks.Task ToggleScatterAsync(bool openingWithFileDrag = false)
         {
-            if (!IsCoordinator) { await coordinator.ToggleScatterAsync(); return; }
+            if (!IsCoordinator) { await coordinator.ToggleScatterAsync(openingWithFileDrag); return; }
             if (animationManager == null || isTransitioning || movingWindow) return;
             if (drag.IsPressed) { CancelDrag(); return; }
+            if (fileDrag != null) { DismissFileDrag(null); return; }
             if (desktopToggle.RestorePending)
             {
                 RequestDesktopToggle();
@@ -506,7 +532,7 @@ namespace WindowScatter
                 TryDismissScatter();
             }
             else if (CanActivateScatter())
-                await StartScatterAsync();
+                await StartScatterAsync(openingWithFileDrag: openingWithFileDrag);
         }
 
         private void RequestDismissScatter()
@@ -529,7 +555,8 @@ namespace WindowScatter
             }
         }
 
-        private async System.Threading.Tasks.Task StartScatterAsync(AppExposeRequest? request = null)
+        private async System.Threading.Tasks.Task StartScatterAsync(AppExposeRequest? request = null,
+            bool openingWithFileDrag = false)
         {
             if (!CanActivateScatter()) return;
             isScatterActive = true;
@@ -544,6 +571,7 @@ namespace WindowScatter
                 var pt = ReadPointer();
                 var pointerMonitor = MonitorHelper.GetMonitorFromPoint(pt.X, pt.Y);
                 InitializeOverviewViews(MonitorHelper.GetMonitors(), pointerMonitor.Handle);
+                if (openingWithFileDrag) BeginFileDrag(pt);
                 lastHoverPosition = pt;
                 previewKey.Release();
                 try
@@ -575,7 +603,8 @@ namespace WindowScatter
                 }
                 foreach (var view in views) view.ShowView();
                 activeView = this;
-                SelectWindow(OverviewPreview.InitialSelection(previousWindow, AllThumbs().Select(t => t.WindowHandle)));
+                SelectWindow(fileDrag != null ? IntPtr.Zero :
+                    OverviewPreview.InitialSelection(previousWindow, AllThumbs().Select(t => t.WindowHandle)));
                 activeView!.FocusOverviewInput();
                 ApplyWorkingSetFloor();
                 foreach (var view in views)
@@ -600,6 +629,7 @@ namespace WindowScatter
 
         private void OnWindowClicked(IntPtr windowHandle)
         {
+            if (BlocksThumbnailInput) return;
             var thumb = coordinator.AllThumbs().FirstOrDefault(t =>
                 t.WindowHandle == windowHandle && !t.IsFiltered);
             if (thumb != null) coordinator.CloseAllViews(thumb.Identity);
@@ -898,6 +928,7 @@ namespace WindowScatter
 
         private void FullCleanup()
         {
+            ResetFileDrag();
             appExposeRequest = null;
             searchQuery = "";
             moveCancellation?.Cancel();
