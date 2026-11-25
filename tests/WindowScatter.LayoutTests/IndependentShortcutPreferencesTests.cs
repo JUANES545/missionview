@@ -45,21 +45,25 @@ public sealed class IndependentShortcutPreferencesTests : IDisposable
         Assert.Equal(json, File.ReadAllText(Current));
     }
 
-    [Fact]
-    public void IndependentBindingPersistsCopiesAndChangesOverviewWithoutReDeriving()
+    [Theory]
+    [InlineData("Win+F12", "Ctrl+Alt+E", (int)'E')]
+    [InlineData("Win+F13", "Ctrl+Alt+F24", 0x87)]
+    [InlineData("Alt+Tab", "Ctrl+Alt+F24", 0x87)]
+    public void IndependentBindingPersistsCopiesAndChangesOverviewWithoutReDeriving(string normal, string app, int appKey)
     {
-        var settings = new AppSettings { Hotkey = "Win+F12", AppExposeHotkey = "Ctrl+Alt+E", AnimationSpeed = 0.63 };
+        var settings = new AppSettings { Hotkey = normal, AppExposeHotkey = app, AnimationSpeed = 0.63 };
         Store.Save(settings);
         var loaded = Store.Load();
-        Assert.Equal("Ctrl+Alt+E", loaded.AppExposeHotkey);
+        Assert.Equal(normal, loaded.Hotkey);
+        Assert.Equal(app, loaded.AppExposeHotkey);
         var candidate = loaded.Copy();
         candidate.Hotkey = "Alt+F1";
         loaded.CopyFrom(candidate);
         Store.Save(loaded);
         var after = Store.Load();
         Assert.Equal("Alt+F1", after.Hotkey);
-        Assert.Equal("Ctrl+Alt+E", after.AppExposeHotkey);
-        Assert.Equal(new OverviewHotkey(3, 'E'), OverviewShortcutPair.Parse(after.Hotkey, after.AppExposeHotkey).AppExpose);
+        Assert.Equal(app, after.AppExposeHotkey);
+        Assert.Equal(new OverviewHotkey(3, appKey), OverviewShortcutPair.Parse(after.Hotkey, after.AppExposeHotkey).AppExpose);
         Assert.Equal(0.63, after.AnimationSpeed);
     }
 

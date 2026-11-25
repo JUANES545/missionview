@@ -38,21 +38,22 @@ namespace WindowScatter
         {
             if (!OverviewShortcutPair.TryParse(text, appExposeText, out var pair, out error)) return false;
             var normal = pair.Normal;
-            bool shiftConflict = pair.AppExpose == null;
+            bool shiftConflict = pair.AppExpose == null && !normal.IsAltTab;
             if (shiftConflict && !preserveExistingShiftShortcut && inheritedShiftShortcut != normal)
             {
                 error = "This shortcut already includes Shift. Choose one without Shift to enable both overview shortcuts. The previous shortcut is unchanged.";
                 return false;
             }
             var desired = new Dictionary<int, OverviewHotkey>();
-            desired.Add(NormalId, normal);
+            if (!normal.IsAltTab) desired.Add(NormalId, normal);
             if (pair.AppExpose is { } app) desired.Add(AppExposeId, app);
             var nextIntercepted = new Dictionary<int, OverviewHotkey>();
-            if (intercepted.Count != 0 && !canIntercept())
+            if ((normal.IsAltTab || intercepted.Count != 0) && !canIntercept())
             {
                 error = "The overview keyboard handler is unavailable. The previous shortcuts are unchanged.";
                 return false;
             }
+            if (normal.IsAltTab) nextIntercepted.Add(NormalId, normal);
             var previous = new Dictionary<int, OverviewHotkey>(registered);
             var removed = new List<KeyValuePair<int, OverviewHotkey>>();
             var added = new List<int>();

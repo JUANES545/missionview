@@ -20,6 +20,7 @@ public class OverviewHotkeyTests
 
     [Theory]
     [InlineData("Win+F12", 8, 0x7B)]
+    [InlineData("Win+F24", 8, 0x87)]
     [InlineData("Alt+F1", 2, 0x70)]
     [InlineData("Ctrl+Alt+K", 3, 0x4B)]
     public void DerivesShiftFromConfigurationWithExactModifiersAndNoFixedFunctionKey(string shortcut, int modifiers, int key)
@@ -30,6 +31,8 @@ public class OverviewHotkeyTests
         Assert.Empty(error);
         Assert.True(hotkeys.MatchesNormal(key, modifiers));
         Assert.True(hotkeys.MatchesAppExpose(key, modifiers | 4));
+        Assert.Equal(new OverviewHotkey(modifiers, key), native.Registered[OverviewHotkeys.NormalId]);
+        Assert.Equal(new OverviewHotkey(modifiers | 4, key), native.Registered[OverviewHotkeys.AppExposeId]);
         Assert.False(hotkeys.MatchesNormal(key, modifiers | 4));
         Assert.False(hotkeys.MatchesAppExpose(key + 1, modifiers | 4));
         Assert.False(hotkeys.MatchesAppExpose(key, modifiers | 4 | 16));
@@ -177,6 +180,11 @@ public class OverviewHotkeyTests
     [InlineData("Win++F12")]
     [InlineData("Win+F12+F1")]
     [InlineData("Win+Unknown+F12")]
+    [InlineData("Win+F0")]
+    [InlineData("Win+F25")]
+    [InlineData("Win+F013")]
+    [InlineData("Win+F 13")]
+    [InlineData("Win+F24x")]
     [InlineData("Shift+Win")]
     public void InvalidInputLeavesCurrentRegistrationAndDispatchUntouched(string invalid)
     {

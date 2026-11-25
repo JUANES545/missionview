@@ -196,7 +196,22 @@ internal sealed class SettingsWindow : Window
         AddPreference(general, "Reset settings", reset,
             "Restore defaults in this settings window. Save applies them; Cancel keeps your current settings.");
         AddPreference(shortcuts, "Overview shortcut", shortcut, "Record a shortcut with Ctrl, Alt or Win. Press Escape to cancel recording. Changes apply when you save.");
-        AddPreference(shortcuts, "App Exposé shortcut", appExposeShortcut, "Open windows from the application under the pointer. Record a separate shortcut with Ctrl, Alt or Win. Until changed, this follows the overview shortcut with Shift.");
+        var useAltTab = new Button { Content = "Use Alt+Tab" };
+        AddPreference(shortcuts, "Windows switcher", useAltTab,
+            "Use left Alt+Tab for Overview instead of the Windows switcher while MissionView is running. Changes apply when you save.");
+        AutomationProperties.SetName(useAltTab, "Use Alt+Tab");
+        useAltTab.Click += (_, _) =>
+        {
+            StopRecording();
+            if (!OverviewShortcutPair.TryParse("Alt+Tab", appExposeHotkey, out _, out string error))
+            {
+                ReportRecordingError(error);
+                return;
+            }
+            hotkey = "Alt+Tab";
+            RefreshShortcutHint();
+        };
+        AddPreference(shortcuts, "App Exposé shortcut", appExposeShortcut, "Open windows from the application under the pointer. Record a separate shortcut with Ctrl, Alt or Win. By default this follows Overview with Shift, except when Overview uses Alt+Tab.");
         foreach (var recorder in new[] { shortcut, appExposeShortcut })
         {
             recorder.ContentTemplate = RecorderContentTemplate();
@@ -689,7 +704,7 @@ internal sealed class SettingsWindow : Window
                     ? appExposeHotkey == null ? "Follows Overview" : ""
                     : "App Exposé is unavailable: Windows could not reserve both shortcuts. Choose another shortcut.";
         exposeHint.Visibility = exposeHint.Text.Length == 0 ? Visibility.Collapsed : Visibility.Visible;
-        var preview = pair.AppExpose == new OverviewHotkey(8, 'W') ? appExposePreview : shortcutPreview;
+        var preview = !pair.Normal.IsAltTab && pair.AppExpose == new OverviewHotkey(8, 'W') ? appExposePreview : shortcutPreview;
         preview.Text = warning;
         preview.Visibility = Visibility.Visible;
         RefreshRecorderNames();
