@@ -4,6 +4,8 @@ namespace WindowScatter
     {
         public const int Shift = 4;
         public const int Win = 8;
+        public const int Tab = 0x09;
+        public bool IsAltTab => Modifiers == 2 && Key == Tab;
         public uint NativeModifiers => (uint)((Modifiers & 12) | ((Modifiers & 1) << 1) | ((Modifiers & 2) >> 1));
         public OverviewHotkey WithShift => this with { Modifiers = Modifiers | Shift };
 
@@ -39,7 +41,7 @@ namespace WindowScatter
         {
             var normal = OverviewHotkey.Parse(normalText);
             if (appExposeText == null)
-                return new(normal, (normal.Modifiers & OverviewHotkey.Shift) == 0 ? normal.WithShift : null);
+                return new(normal, !normal.IsAltTab && (normal.Modifiers & OverviewHotkey.Shift) == 0 ? normal.WithShift : null);
             var app = OverviewHotkey.Parse(appExposeText);
             if ((app.Modifiers & 0x0B) == 0)
                 throw new ArgumentException("Include Ctrl, Alt or Win in the App Expose shortcut.");
@@ -70,7 +72,9 @@ namespace WindowScatter
             warning = "";
             if (!TryParse(normalText, appExposeText, out var pair, out error)) return false;
             var widgets = new OverviewHotkey(8, 'W');
-            warning = pair.Normal == widgets
+            warning = pair.Normal.IsAltTab
+                ? "Replaces the Windows switcher (left Alt+Tab) while MissionView is running."
+                : pair.Normal == widgets
                 ? "Opens MissionView instead of Widgets while MissionView is running."
                 : pair.AppExpose == widgets
                     ? "Opens App Expose instead of Widgets while MissionView is running."

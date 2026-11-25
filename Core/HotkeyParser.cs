@@ -83,6 +83,18 @@ namespace WindowScatter
                 case "f10": return 0x79;
                 case "f11": return 0x7A;
                 case "f12": return 0x7B;
+                case "f13": return 0x7C;
+                case "f14": return 0x7D;
+                case "f15": return 0x7E;
+                case "f16": return 0x7F;
+                case "f17": return 0x80;
+                case "f18": return 0x81;
+                case "f19": return 0x82;
+                case "f20": return 0x83;
+                case "f21": return 0x84;
+                case "f22": return 0x85;
+                case "f23": return 0x86;
+                case "f24": return 0x87;
                 default: return 0;
             }
         }

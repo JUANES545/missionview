@@ -50,7 +50,9 @@ Use the desktop button or `Alt+S` in the overview to show or restore the desktop
 | `Alt+S` | Show or restore the desktop from the overview |
 | `Escape` | Clear the search, or cancel without switching if the search is empty |
 
-Set either shortcut in **Settings → Shortcuts**. App Exposé follows `Shift` + the overview shortcut until you assign it a separate combination. If the overview shortcut already includes `Shift`, assign App Exposé its own shortcut.
+Set either shortcut in **Settings → Shortcuts**. Both support `F1` through `F24` with `Win`, `Ctrl`, or `Alt`. App Exposé follows `Shift` + the overview shortcut until you assign it a separate combination. If Overview uses `Alt+Tab` or already includes `Shift`, assign App Exposé its own shortcut.
+
+Choose **Use Alt+Tab** and **Save** to replace the Windows switcher while MissionView runs. Press left `Alt+Tab` once to open Overview, select a window, then press it again to switch. Releasing Alt leaves Overview open. `Esc` cancels. This choice does not assign `Alt+Shift+Tab` to App Exposé. Save another Overview shortcut, reset to defaults and save, or quit MissionView to return left `Alt+Tab` to Windows.
 
 MissionView can intercept supported occupied shortcuts while it runs. Settings shows a notice before **Save**; `Win+W` uses MissionView instead of Widgets. OS-protected shortcuts such as `Win+L` and `Ctrl+Alt+Delete` remain unavailable.
 

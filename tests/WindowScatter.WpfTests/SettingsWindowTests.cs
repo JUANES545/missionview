@@ -66,7 +66,7 @@ public sealed class SettingsWindowTests
                 var controls = Descendants(window).OfType<Control>().ToArray();
                 Assert.Equal(4, controls.OfType<ComboBox>().Count());
                 Assert.Equal(new[] { "Selection border", "Overview displays", "Thumbnail size", "Background dimming", "Reset settings",
-                    "Overview shortcut: Win+F12", "App Exposé shortcut: Win+Shift+F12", "Corner", "Delay (milliseconds)" },
+                    "Overview shortcut: Win+F12", "Use Alt+Tab", "App Exposé shortcut: Win+Shift+F12", "Corner", "Delay (milliseconds)" },
                     controls.Where(c => !string.IsNullOrEmpty(AutomationProperties.GetName(c)) &&
                         !AutomationProperties.GetAutomationId(c).EndsWith(" help")).Select(AutomationProperties.GetName));
                 Assert.Equal("Win+F12", Button(window, "Win+F12").Content);
@@ -81,6 +81,32 @@ public sealed class SettingsWindowTests
                 Assert.False(saved.EnableHotCorners);
                 Assert.Equal(0.63, source.AnimationSpeed);
                 Assert.Equal("White", saved.SelectionBorderColor);
+            }
+            finally { window.Close(); }
+        });
+
+    [Fact]
+    public void AltTabChoiceWarnsAndOnlySavesTheOverviewShortcut()
+        => RunSta(() =>
+        {
+            var source = new AppSettings { AppExposeHotkey = "Ctrl+F24" };
+            AppSettings? saved = null;
+            var window = new SettingsWindow(source, value => { saved = value; return true; }, new TextBlock(), () => true);
+            try
+            {
+                Assert.Equal("Win+W", Button(window, "Win+W").Content);
+                Button(window, "Use Alt+Tab").RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+                Assert.Equal("Alt+Tab", Button(window, "Alt+Tab").Content);
+                Assert.Equal("Ctrl+F24", Button(window, "Ctrl+F24").Content);
+                Assert.Contains(Descendants(window).OfType<TextBlock>(), text =>
+                    text.Visibility == Visibility.Visible &&
+                    text.Text == "Replaces the Windows switcher (left Alt+Tab) while MissionView is running.");
+                Assert.Null(saved);
+                Assert.Equal("Win+W", source.Hotkey);
+                Button(window, "Save").RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+                Assert.NotNull(saved);
+                Assert.Equal("Alt+Tab", saved.Hotkey);
+                Assert.Equal("Ctrl+F24", saved.AppExposeHotkey);
             }
             finally { window.Close(); }
         });
@@ -291,8 +317,11 @@ public sealed class SettingsWindowTests
             finally { window.Close(); }
         });
 
-    [Fact]
-    public void ReservedShortcutRawBridgeUsesHeritageModifierBitsAndIgnoresDuplicateDelivery()
+    [Theory]
+    [InlineData(0x7B, "Win+F12", "Win+Shift+F12")]
+    [InlineData(0x87, "Win+F24", "Win+Shift+F24")]
+    public void ReservedShortcutRawBridgeUsesHeritageModifierBitsAndIgnoresDuplicateDelivery(
+        int virtualKey, string chord, string derivedChord)
         => RunSta(() =>
         {
             var window = new SettingsWindow(new AppSettings { Hotkey = "Win+F12" }, _ => true, new TextBlock(), () => true);
@@ -302,14 +331,16 @@ public sealed class SettingsWindowTests
                 button.RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
                 int generation = window.RecordingGeneration;
                 window.RecordVirtualKey(0x5B, 8, true);
-                window.RecordVirtualKey(0x7B, 8, false);
+                window.RecordVirtualKey(virtualKey, 8, false);
                 Assert.True(window.IsRecordingShortcut);
-                window.RecordVirtualKey(0x7B, 8, true);
+                window.RecordVirtualKey(virtualKey, 8, true);
                 Assert.False(window.IsRecordingShortcut);
                 Assert.True(window.RecordingGeneration > generation);
-                Assert.Equal("Win+F12", button.Content);
+                Assert.Equal(chord, button.Content);
+                Assert.Equal(derivedChord, Descendants(window).OfType<Button>()
+                    .Single(b => AutomationProperties.GetAutomationId(b) == "App Exposé shortcut").Content);
                 window.RecordShortcut(Key.F9, ModifierKeys.Control);
-                Assert.Equal("Win+F12", button.Content);
+                Assert.Equal(chord, button.Content);
                 button.RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
                 generation = window.RecordingGeneration;
                 window.RecordVirtualKey(0x1B, 0, true);
