@@ -3,6 +3,7 @@ namespace WindowScatter
     internal readonly record struct OverviewHotkey(int Modifiers, int Key)
     {
         public const int Shift = 4;
+        public const int Win = 8;
         public uint NativeModifiers => (uint)((Modifiers & 12) | ((Modifiers & 1) << 1) | ((Modifiers & 2) >> 1));
         public OverviewHotkey WithShift => this with { Modifiers = Modifiers | Shift };
 
@@ -25,7 +26,7 @@ namespace WindowScatter
             }
             var parsed = HotkeyParser.Parse(text);
             if (keys != 1) throw new ArgumentException("The shortcut must contain exactly one non-modifier key.");
-            if (((parsed.ModifierKeys & 8) != 0 && parsed.VirtualKeyCode == 'L') ||
+            if (((parsed.ModifierKeys & Win) != 0 && parsed.VirtualKeyCode == 'L') ||
                 ((parsed.ModifierKeys & 3) == 3 && parsed.VirtualKeyCode == 0x2E))
                 throw new ArgumentException("Windows reserves this shortcut for system security. Choose another shortcut.");
             return new(parsed.ModifierKeys, parsed.VirtualKeyCode);
