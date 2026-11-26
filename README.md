@@ -68,4 +68,10 @@ For a supported overview shortcut that includes `Win`, MissionView masks the Win
 
 Right-click the tray icon to open **Settings**. Select an info button for inline help. Choose startup, shortcuts, hot corners, thumbnail size, background dimming and a White, Blue or Mint selection border (White by default). Show the overview on all displays or only the display under the pointer; moving between displays requires all displays. **Show minimized windows in Overview** is on by default and independent of the App Exposé shelf. The shelf lists minimized windows by title and icon, without a live preview; select one to restore it. Completed changes apply as you make them. Press `Enter` to apply a new hot-corner delay. **Reset settings** asks before restoring defaults. Check for updates from Settings or the tray; MissionView asks before starting the installer.
 
+## Contribute
+
+Read the [contribution guide](CONTRIBUTING.md) to submit changes from a fork or [report a security issue](CONTRIBUTING.md#reporting-security-issues).
+
+## License
+
 [MIT](LICENSE). Based on [miguelo96/WindowScatter](https://github.com/miguelo96/WindowScatter), via [RuoChen5251/WindowScatter](https://github.com/RuoChen5251/WindowScatter). Original copyright notices remain in LICENSE.
