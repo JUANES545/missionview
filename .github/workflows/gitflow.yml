@@ -1,0 +1,55 @@
+name: GitFlow
+
+on:
+  pull_request_target:
+    branches: [develop, main]
+    types: [opened, reopened, synchronize, edited, ready_for_review]
+
+permissions: {}
+
+concurrency:
+  group: gitflow-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  route:
+    name: Check PR route
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      pull-requests: read
+      statuses: write
+    steps:
+      - uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8.0.0
+        with:
+          script: |
+            const assert = require('node:assert/strict');
+            const number = context.payload.pull_request.number;
+            const { data: pr } = await github.rest.pulls.get({
+              ...context.repo, pull_number: number,
+            });
+            if (pr.state !== 'open' || !['develop', 'main'].includes(pr.base.ref)) return;
+
+            assert.equal(pr.number, number);
+            assert.equal(pr.base.repo.id, context.payload.repository.id);
+            assert.match(pr.head.sha, /^[0-9a-f]{40}$/);
+
+            const promotion = pr.base.ref === 'main';
+            const expected = promotion
+              ? 'Open the PR from this repository: develop.'
+              : 'Open the PR from a feature/<name> branch.';
+            const allowed = promotion
+              ? pr.head.ref === 'develop' && pr.head.repo?.id === pr.base.repo.id
+              : Boolean(pr.head.repo) && /^feature\/[a-z0-9][a-z0-9-]*$/.test(pr.head.ref);
+
+            // The job check belongs to the default branch; require this head status instead.
+            await github.rest.repos.createCommitStatus({
+              ...context.repo,
+              sha: pr.head.sha,
+              context: `gitflow/${pr.base.ref}`,
+              state: allowed ? 'success' : 'failure',
+              description: allowed ? 'GitFlow route accepted.' : expected,
+              target_url: `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${context.runId}`,
+            });
+            core.info(`Checked PR #${number} at ${pr.head.sha} targeting ${pr.base.ref}.`);
+            if (!allowed) core.setFailed(expected);
