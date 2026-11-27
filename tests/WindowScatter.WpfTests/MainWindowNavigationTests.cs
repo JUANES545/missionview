@@ -883,6 +883,11 @@ namespace WindowScatter
         private readonly TextBox SearchBox = new();
         private readonly StackPanel SearchPanel = new() { Visibility = Visibility.Collapsed, IsHitTestVisible = false };
         private readonly TextBlock SearchStatusText = new() { Visibility = Visibility.Collapsed };
+        // The isolated overview fixture models the shipped unavailable desktop provider.
+        private readonly StackPanel virtualDesktopButtons = new();
+        private bool CanChangeDesktop => false;
+        private (bool OverStrip, Guid? Target) VirtualDesktopAt(Win32Interop.POINT cursor) => default;
+        private void LayoutVirtualDesktopStrip(double width) { }
         private readonly Window chromeWindow = new() { ShowActivated = false };
         private AppExposeRequest? appExposeRequest;
         private string IdleMoveStatus => "";
