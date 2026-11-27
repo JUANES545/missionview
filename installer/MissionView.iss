@@ -46,4 +46,19 @@ Type: files; Name: "{app}\WindowScatter.runtimeconfig.json"
 [Icons]
 Name: "{group}\MissionView"; Filename: "{app}\MissionView.exe"; WorkingDir: "{app}"
 
-; Do not launch the app or remove user settings during installation/uninstallation.
+[Run]
+Filename: "{app}\MissionView.exe"; Description: "Reopen MissionView"; Flags: postinstall nowait skipifsilent runasoriginaluser; Check: RestartRequested
+
+[Code]
+function RestartRequested: Boolean;
+var
+  I: Integer;
+begin
+  Result := False;
+  for I := 1 to ParamCount do
+    if CompareText(ParamStr(I), '/RESTARTMISSIONVIEW') = 0 then
+    begin
+      Result := True;
+      Exit;
+    end;
+end;

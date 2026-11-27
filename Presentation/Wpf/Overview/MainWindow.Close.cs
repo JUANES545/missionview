@@ -9,6 +9,9 @@ public partial class MainWindow
 {
     private readonly WindowClose windowClose = new();
     private DispatcherTimer? closeObservationTimer;
+    private bool closedWindowRefreshRequired;
+    private bool closedWindowRefreshQueued;
+    private int closeTraceEntries;
     private string PendingCloseStatus => IsSearching
         ? "Close requested. Clear the search, then press Escape to check the last requested window."
         : "Close requested. Press Escape to check the last requested window if needed.";
@@ -26,7 +29,11 @@ public partial class MainWindow
         if (string.IsNullOrEmpty(title)) title = thumb.TitleLabel.Text;
         OverviewCloseInput.Attach(thumb, title, () => CanCloseWindow(thumb, generation),
             () => RequestWindowClose(thumb, generation));
-        if (coordinator.windowClose.IsPending(thumb.Identity)) thumb.CloseButton!.IsEnabled = false;
+        if (coordinator.windowClose.IsPending(thumb.Identity))
+        {
+            thumb.CloseButton!.IsEnabled = false;
+            thumb.SuppressSelectionOutlineForClose();
+        }
     }
 
     private void RequestWindowClose(WindowThumb thumb, int generation)
@@ -35,7 +42,13 @@ public partial class MainWindow
         try
         {
             coordinator.windowClose.Request(thumb.Identity);
-            if (thumb.CloseButton?.IsKeyboardFocused == true) FocusOverviewInput();
+            thumb.SuppressSelectionOutlineForClose();
+            coordinator.TraceClosePhase("request-queued");
+            if (thumb.CloseButton?.IsKeyboardFocused == true)
+            {
+                coordinator.TraceClosePhase("overview-focus-return");
+                FocusOverviewInput();
+            }
             if (thumb.CloseButton != null) thumb.CloseButton.IsEnabled = false;
             coordinator.SetCloseStatus(PendingCloseStatus);
             coordinator.closeObservationTimer ??= CreateCloseObservationTimer();
@@ -64,24 +77,76 @@ public partial class MainWindow
         try
         {
             var closed = windowClose.ConfirmClosed();
+            if (closed.Count != 0)
+            {
+                TraceClosePhase("identity-closed");
+                foreach (var view in views)
+                {
+                    // Retire the live DWM relation too, before the deferred layout rebuild.
+                    view.animationManager.StopKeepAlive();
+                    view.thumbnailManager.HideClosedSources(closed, windowClose.IsClosed);
+                    foreach (var thumb in view.minimizedStrip?.Thumbs ?? [])
+                        if (closed.Contains(thumb.Identity)) thumb.HideIfSourceClosed(windowClose.IsClosed);
+                }
+                closedWindowRefreshRequired = true;
+            }
             if (TryExposeCloseAttention()) return;
-            if (closed.Count == 0) return;
+            if (!closedWindowRefreshRequired || closedWindowRefreshQueued) return;
+            int generation = scatterInteraction.Generation;
+            closedWindowRefreshQueued = true;
+            // Submit the dead source's hidden chrome before synchronous enumeration/DWM rebuild.
+            Dispatcher.BeginInvoke(new Action(() =>
+            {
+                if (generation != scatterInteraction.Generation) return;
+                closedWindowRefreshQueued = false;
+                if (!scatterInteraction.IsOpen || isClosing || isScatterActive || isTransitioning || AnyAnimating ||
+                    views.Any(v => v.animationManager.IsPreviewAnimating) || movingWindow || drag.IsPressed || navigationPending) return;
+                RefreshAfterConfirmedClose();
+            }), DispatcherPriority.Loaded);
+        }
+        catch (Exception error) { AbortOverview(error); }
+    }
+
+    private void RefreshAfterConfirmedClose()
+    {
+        try
+        {
             if (!EnsureTopology()) return;
             var selection = AllThumbs().FirstOrDefault(t => t.WindowHandle == selectedWindowHandle)?.Identity;
             previewKey.Release();
             foreach (var view in views) view.ResetPreview();
             var sourceOrder = WindowStacking.Capture();
             var windows = EnumerateOverviewWindows();
-            foreach (var view in views) view.RebuildThumbnails(sourceOrder, windows[view.monitor.Handle], settled: true);
+            for (int i = 0; i < views.Count; i++)
+            {
+                var view = views[i];
+                if (view.TryKeepThumbnailsAfterClose(sourceOrder, windows[view.monitor.Handle]))
+                {
+                    TraceClosePhase("view-retained", i);
+                    continue;
+                }
+                TraceClosePhase("view-rebuild-begin", i);
+                view.RebuildThumbnails(sourceOrder, windows[view.monitor.Handle], settled: true);
+                TraceClosePhase("view-rebuild-end", i);
+            }
             session.Select(IntPtr.Zero);
             var retained = selection is { } target && AllThumbs().Any(t => t.Identity == target)
                 ? target.Handle : IntPtr.Zero;
             if (IsSearching) RefreshSearchResults(retained);
             else SelectWindow(retained != IntPtr.Zero ? retained : AllThumbs().FirstOrDefault()?.WindowHandle ?? IntPtr.Zero);
+            closedWindowRefreshRequired = false;
             SetCloseStatus(windowClose.HasPending ? PendingCloseStatus : "Window closed");
             if (!windowClose.HasPending) closeObservationTimer?.Stop();
         }
         catch (Exception error) { AbortOverview(error); }
+    }
+
+    private void TraceClosePhase(string phase, int view = -1)
+    {
+        if (Environment.GetEnvironmentVariable("MISSIONVIEW_CLOSETRACE") != "1" || closeTraceEntries >= 64) return;
+        closeTraceEntries++;
+        System.Diagnostics.Trace.TraceInformation(
+            $"MissionView close phase={phase}; view={view}; ticks={System.Diagnostics.Stopwatch.GetTimestamp()}; frequency={System.Diagnostics.Stopwatch.Frequency}");
     }
 
     private void SetCloseStatus(string text)
@@ -99,6 +164,8 @@ public partial class MainWindow
     {
         coordinator.closeObservationTimer?.Stop();
         coordinator.windowClose.EndSession();
+        coordinator.closedWindowRefreshRequired = false;
+        coordinator.closedWindowRefreshQueued = false;
     }
 
     private void RestorePendingCloseStatus()
@@ -113,27 +180,32 @@ public partial class MainWindow
             views.Any(v => v.animationManager.IsPreviewAnimating) || movingWindow || drag.IsPressed || navigationPending) return false;
         var target = windowClose.FindAttentionTarget();
         if (!target.HasValue) return false;
-        ExposePendingClose(target.Value);
+        TraceClosePhase("attention-detected");
+        ExposePendingClose(target.Value, explicitReturn: false);
         return true;
     }
 
     private void ReturnToPendingClose()
     {
-        ExposePendingClose(windowClose.ResolveReturnTarget() ?? default);
+        ExposePendingClose(windowClose.ResolveReturnTarget() ?? default, explicitReturn: true);
     }
 
-    private void ExposePendingClose(WindowActivationTarget target)
+    private void ExposePendingClose(WindowActivationTarget target, bool explicitReturn)
     {
         var original = windowClose.LatestRequest;
-        bool maximized = AllThumbs().Any(t => t.Identity == target && t.WasMaximized);
         if (!scatterInteraction.TryBeginClose(target, out _)) return;
+        TraceClosePhase("handoff-begin");
+        TraceClosePhase(explicitReturn ? "handoff-explicit-return" :
+            target == original ? "handoff-source-no-restore" : "handoff-owned-prompt");
         isTransitioning = true;
         HideSearchForTransition();
         moveCancellation?.Cancel();
         CloseMoveMenus();
         CancelDrag();
-        windowActivation.CloseOverviewAndActivate(target, restore: true, maximized, scatterInteraction.Surfaces,
-            HideAllViews, () => original is { } source && windowClose.IsReturnTargetValid(target, source));
+        windowActivation.CloseOverviewForPendingClose(target, original ?? default, explicitReturn, scatterInteraction.Surfaces,
+            () => { TraceClosePhase("surfaces-hide"); HideAllViews(); },
+            () => original is { } source && windowClose.IsReturnTargetValid(target, source));
+        TraceClosePhase("handoff-end");
         QueueOverviewCleanup();
     }
 }

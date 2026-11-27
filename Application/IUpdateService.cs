@@ -2,8 +2,9 @@ namespace WindowScatter;
 
 internal interface IUpdateService : IDisposable
 {
+    bool IsInstalled { get; }
     Task<UpdateRelease?> CheckAsync(UpdateVersion current, CancellationToken token);
-    Task<VerifiedUpdate> DownloadAsync(UpdateRelease release, IProgress<UpdateProgress>? progress, CancellationToken token);
+    Task<VerifiedUpdate> DownloadAsync(UpdateRelease release, IProgress<UpdateProgress>? progress, CancellationToken token, bool background = false);
     Task<IAsyncDisposable> LockVerifiedInstallerAsync(VerifiedUpdate update, CancellationToken token);
 }
 

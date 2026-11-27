@@ -39,7 +39,8 @@ public class SelectionTransitionTests
                     Assert.False(t.ClickBorder.IsHitTestVisible);
                     Assert.Equal(0, t.TitleLabel.Opacity);
                 });
-                Assert.Equal(1, selectedOutline.Opacity);
+                Assert.Equal(0, selectedOutline.Opacity);
+                Assert.Equal(Visibility.Hidden, selectedOutline.Visibility);
                 bool animationStarted = false;
                 manager.BeginTransition(() =>
                 {

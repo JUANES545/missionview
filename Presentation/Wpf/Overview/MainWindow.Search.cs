@@ -64,7 +64,12 @@ public partial class MainWindow
     private void HideSearchForTransition()
     {
         searchInputView = null;
-        foreach (var view in views) view.RefreshSearchPresentation();
+        foreach (var view in views)
+        {
+            view.thumbnailManager?.BeginTransition(() => { });
+            view.minimizedStrip?.SetSelectionOutlinesVisible(false);
+            view.RefreshSearchPresentation();
+        }
     }
 
     private void RefreshSearchPresentation()
@@ -85,6 +90,7 @@ public partial class MainWindow
         bool besideStatus = left >= 232;
         Canvas.SetTop(SearchPanel, besideStatus ? Math.Clamp(height * .05, 10, 36) : 64);
         MoveStatus.Width = Math.Max(0, besideStatus ? left - 84 : width - 88);
+        LayoutVirtualDesktopStrip(width);
     }
 
     private void SearchBox_TextChanged(object sender, TextChangedEventArgs e)

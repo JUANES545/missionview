@@ -8,6 +8,7 @@ internal sealed class ApplicationServices
     public AppSettings Settings { get; }
     public PreferencesService Preferences { get; }
     public OverviewSession Overview { get; } = new();
+    public OverviewDesktopState Desktops { get; } = new(new UnavailableOverviewDesktops());
     public WindowActivation Activation { get; } = new();
     public DesktopToggle Desktop { get; } = new();
     public WindowTransfer Transfer { get; } = new();
@@ -28,7 +29,7 @@ internal sealed class ApplicationServices
             ?? throw new InvalidOperationException("The MissionView application version is missing.");
         if (!UpdateVersion.TryParse($"{version.Major}.{version.Minor}.{version.Build}", out var current))
             throw new InvalidOperationException("The MissionView application version is invalid.");
-        return new(new UpdateService(), current, shutdown, UpdateInstaller.Start,
-            new DispatcherSynchronizationContext(dispatcher), UpdateInstaller.IsSupported);
+        return new(new UpdateService(isInstalled: UpdateInstaller.IsInstalled), current, shutdown, UpdateInstaller.Start,
+            new DispatcherSynchronizationContext(dispatcher), UpdateInstaller.IsSupported, UpdateInstaller.StartAndRestart);
     }
 }

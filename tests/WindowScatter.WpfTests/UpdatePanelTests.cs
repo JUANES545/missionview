@@ -17,6 +17,50 @@ using Xunit;
 
 public sealed class UpdatePanelTests
 {
+    [Theory]
+    [InlineData(@"D:\Custom\MissionView.exe", @"d:\custom\MissionView.exe", true)]
+    [InlineData(@"D:\Portable\MissionView.exe", @"D:\Custom\MissionView.exe", false)]
+    [InlineData(@"D:\Custom\MissionView.exe", @"D:\Custom\MissionView.exe,0", false)]
+    public void SetupRegistrationMustMatchTheRunningExecutable(string executable, string registration, bool matches)
+        => Assert.Equal(matches, UpdateInstaller.MatchesRegisteredExecutable(executable, registration));
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void AutomaticUpdatesCheckboxOnlyAppearsForRegisteredInstallations(bool installed)
+        => RunSta(async () =>
+        {
+            using var fixture = new OfflineUpdates { Installed = installed };
+            using var controller = fixture.Controller();
+            var settings = new AppSettings();
+            var panel = new UpdatePanel(controller, (_, _) => Task.FromResult(false), settings, candidate =>
+            {
+                settings.CopyFrom(candidate);
+                return true;
+            });
+            panel.ActionRow.RaiseEvent(new RoutedEventArgs(FrameworkElement.LoadedEvent));
+            try
+            {
+                if (installed)
+                {
+                    var checkbox = Assert.Single(panel.AutomaticRow!.Children.OfType<CheckBox>());
+                    Assert.Equal("Install updates automatically", AutomationProperties.GetAutomationId(checkbox));
+                    Assert.Equal(AutomationProperties.GetAutomationId(checkbox), AutomationProperties.GetName(checkbox));
+                    Assert.Equal(false, checkbox.IsChecked);
+                    checkbox.IsChecked = true;
+                    checkbox.RaiseEvent(new RoutedEventArgs(CheckBox.ClickEvent));
+                    Assert.True(settings.InstallUpdatesAutomatically);
+                }
+                else Assert.Null(panel.AutomaticRow);
+
+                await controller.CheckAsync();
+                await controller.DownloadAsync();
+                Assert.Equal(installed ? "Restart to update" : "Install update...", Action(panel).Content);
+                Assert.Equal(0, fixture.Launches);
+            }
+            finally { Unload(panel); }
+        });
+
     [Fact]
     public void ActionFailureBeforeTheControllerLeavesIdleIsVisibleAndAccessible()
         => RunSta(async () =>
@@ -216,18 +260,18 @@ public sealed class UpdatePanelTests
     private static UpdatePanel Panel(UpdateController controller)
     {
         var panel = new UpdatePanel(controller, (_, _) => Task.FromResult(false));
-        panel.RaiseEvent(new RoutedEventArgs(FrameworkElement.LoadedEvent));
+        panel.ActionRow.RaiseEvent(new RoutedEventArgs(FrameworkElement.LoadedEvent));
         return panel;
     }
 
-    private static Button Action(UpdatePanel panel) => panel.Children.OfType<Button>().First();
-    private static Button Cancel(UpdatePanel panel) => panel.Children.OfType<Button>().Last();
-    private static TextBlock Status(UpdatePanel panel) => panel.Children.OfType<TextBlock>().Single();
-    private static ProgressBar Progress(UpdatePanel panel) => panel.Children.OfType<ProgressBar>().Single();
+    private static Button Action(UpdatePanel panel) => panel.ActionRow.Children.OfType<Button>().First();
+    private static Button Cancel(UpdatePanel panel) => panel.ActionRow.Children.OfType<Button>().Last();
+    private static TextBlock Status(UpdatePanel panel) => panel.ActionRow.Children.OfType<TextBlock>().Single();
+    private static ProgressBar Progress(UpdatePanel panel) => panel.ActionRow.Children.OfType<ProgressBar>().Single();
     private static void Click(Button button) => button.RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
     private static void Unload(params UpdatePanel[] panels)
     {
-        foreach (var panel in panels) panel.RaiseEvent(new RoutedEventArgs(FrameworkElement.UnloadedEvent));
+        foreach (var panel in panels) panel.ActionRow.RaiseEvent(new RoutedEventArgs(FrameworkElement.UnloadedEvent));
     }
 
     private static void Capture(FrameworkElement root, string name)
@@ -294,6 +338,7 @@ public sealed class UpdatePanelTests
         internal bool HoldListing { get; init; }
         internal bool FailListing { get; init; }
         internal bool HoldDownload { get; init; }
+        internal bool Installed { get; init; }
         internal TaskCompletionSource ListingGate { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         internal TaskCompletionSource DownloadGate { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         internal int ListingRequests, InstallerRequests, Launches;
@@ -335,7 +380,7 @@ public sealed class UpdatePanelTests
                 @object = new { type = "commit", sha = commit }
             }));
             responses.Add(Api + "/git/commits/" + commit, JsonSerializer.SerializeToUtf8Bytes(new { sha = commit }));
-            service = new UpdateService(new Handler(this));
+            service = new UpdateService(new Handler(this), () => Installed);
         }
 
         internal UpdateController Controller(System.Action? shutdown = null, UpdateVersion? currentVersion = null) => new(service, currentVersion ?? new(0, 1, 0), shutdown ?? (() => { }),

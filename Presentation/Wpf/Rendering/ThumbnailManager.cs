@@ -156,6 +156,7 @@ namespace WindowScatter
                 };
                 if (!thumb.MatchesTitle(foldedQuery))
                     clickBorder.Visibility = highlightBorder.Visibility = titleLabel.Visibility = Visibility.Hidden;
+                thumb.SetOutlineTransition(true);
 
                 if (!animationManager.UpdateThumbnailPosition(thumb, initializeVisibility: true))
                 {
@@ -254,8 +255,7 @@ namespace WindowScatter
                 bool isSelected = thumb.WindowHandle == windowHandle;
                 if (thumb.CloseButton != null) thumb.CloseButton.Selected = isSelected;
 
-                if (thumb.HighlightBorder != null)
-                    thumb.HighlightBorder.Opacity = isSelected ? 1 : 0;
+                thumb.SetSelectionOutline(isSelected);
 
                 if (thumb.TitleLabel != null)
                     thumb.TitleLabel.FontWeight = isSelected ? FontWeights.SemiBold : FontWeights.Normal;
@@ -278,8 +278,7 @@ namespace WindowScatter
             {
                 if (thumb.CloseButton != null)
                     thumb.CloseButton.Visibility = Visibility.Hidden;
-                if (thumb.HighlightBorder != null)
-                    thumb.HighlightBorder.Opacity = 0;
+                thumb.SetOutlineTransition(true);
             }
             startTransition();
         }
@@ -305,9 +304,49 @@ namespace WindowScatter
             ShowLabels(!animating);
             foreach (var thumb in windowThumbs)
             {
+                thumb.SetOutlineTransition(animating);
                 if (thumb.ClickBorder != null) thumb.ClickBorder.IsHitTestVisible = !animating;
                 if (thumb.CloseButton != null)
                     thumb.CloseButton.Visibility = animating ? Visibility.Hidden : Visibility.Visible;
+            }
+        }
+
+        internal bool TryKeepLayoutAfterClose(IReadOnlyList<WindowInfo> windows, IReadOnlyList<IntPtr> sourceOrder)
+        {
+            if (windows.Count != windowThumbs.Count) return false;
+            foreach (var thumb in windowThumbs)
+            {
+                var source = windows.FirstOrDefault(w => w.Identity == thumb.Identity);
+                if (source == null || source.Handle != thumb.WindowHandle || source.WasMinimized ||
+                    source.Title != thumb.Title || source.ApplicationName != thumb.ApplicationName ||
+                    source.WasMaximized != thumb.WasMaximized || thumb.ThumbnailHandle == IntPtr.Zero ||
+                    source.OriginalRect.Left != thumb.StartX || source.OriginalRect.Top != thumb.StartY ||
+                    source.OriginalRect.Right - source.OriginalRect.Left != thumb.StartWidth ||
+                    source.OriginalRect.Bottom - source.OriginalRect.Top != thumb.StartHeight ||
+                    thumb.CurrentX != thumb.TargetX || thumb.CurrentY != thumb.TargetY ||
+                    thumb.CurrentWidth != thumb.TargetWidth || thumb.CurrentHeight != thumb.TargetHeight) return false;
+            }
+            SourceOrder = sourceOrder;
+            return true;
+        }
+
+        internal void HideClosedSources(IReadOnlyList<WindowActivationTarget> closed,
+            Func<WindowActivationTarget, bool> isClosed, Func<IntPtr, int>? unregister = null)
+        {
+            unregister ??= DwmUnregisterThumbnail;
+            foreach (var thumb in windowThumbs.ToArray())
+            {
+                if (!closed.Contains(thumb.Identity) || !thumb.HideIfSourceClosed(isClosed)) continue;
+                if (thumb.ThumbnailHandle != IntPtr.Zero)
+                {
+                    int result = unregister(thumb.ThumbnailHandle);
+                    if (result == unchecked((int)0x80070057))
+                        System.Diagnostics.Trace.TraceWarning("DWM had already removed a confirmed-closed source's thumbnail.");
+                    else if (result < 0)
+                        throw new InvalidOperationException($"DWM could not remove the closed window's thumbnail: 0x{result:X8}.");
+                    thumb.ThumbnailHandle = IntPtr.Zero;
+                }
+                windowThumbs.Remove(thumb);
             }
         }
 
@@ -408,7 +447,8 @@ namespace WindowScatter
                 int result = DwmUpdateThumbnailProperties(thumb.ThumbnailHandle, ref properties);
                 if (result < 0)
                     throw new InvalidOperationException($"DWM could not change thumbnail visibility: 0x{result:X8}.");
-                thumb.ClickBorder.Visibility = thumb.HighlightBorder.Visibility = thumb.TitleLabel.Visibility = visibility;
+                thumb.ClickBorder.Visibility = thumb.TitleLabel.Visibility = visibility;
+                thumb.RefreshSelectionOutline();
                 System.Windows.Automation.Peers.UIElementAutomationPeer.FromElement(thumb.ClickBorder)?.ResetChildrenCache();
                 changed = true;
             }

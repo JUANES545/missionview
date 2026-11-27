@@ -295,6 +295,91 @@ public sealed class UpdateTests
     }
 
     [Fact]
+    public async Task BackgroundStagingSharesTheOperationAndOnlyRestartsAfterExplicitConsent()
+    {
+        using var fixture = new Fixture { Installed = true };
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var unblock = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        fixture.BeforeRequest = async (request, token) =>
+        {
+            if (request.RequestUri!.AbsoluteUri != Fixture.ListUrl) return;
+            entered.SetResult();
+            await unblock.Task.WaitAsync(token);
+        };
+        string? installer = null;
+        int shutdowns = 0;
+        using var controller = fixture.Controller(shutdown: () => shutdowns++, restart: path =>
+        {
+            installer = path;
+            return true;
+        });
+        try
+        {
+            Task staging = controller.StageInBackgroundAsync();
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            Assert.Same(staging, controller.CheckAsync());
+            unblock.SetResult();
+            await staging;
+            await controller.StageInBackgroundAsync();
+            Assert.Equal(UpdateStatus.ReadyToInstall, controller.State.Status);
+            Assert.Single(fixture.Requests, url => url == fixture.SetupUrl);
+            Assert.Null(installer);
+            Assert.Equal(0, shutdowns);
+
+            await controller.InstallAsync((_, _) => Task.FromResult(false), restart: true);
+            Assert.Equal(UpdateStatus.ReadyToInstall, controller.State.Status);
+            Assert.Null(installer);
+            await controller.InstallAsync((_, _) => Task.FromResult(true), restart: true);
+            Assert.NotNull(installer);
+            Assert.Equal(1, shutdowns);
+        }
+        finally
+        {
+            if (installer is not null)
+            {
+                File.Delete(installer);
+                Directory.Delete(Path.GetDirectoryName(installer)!);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task PortableCanCheckManuallyButNeitherEntryPointCanStageInTheBackground()
+    {
+        using var fixture = new Fixture();
+        using var controller = fixture.Controller();
+        await controller.StageInBackgroundAsync();
+        Assert.Empty(fixture.Requests);
+        Assert.Equal(UpdateStatus.Idle, controller.State.Status);
+
+        var release = await fixture.CheckAsync();
+        await Assert.ThrowsAsync<UpdateException>(() =>
+            fixture.Service.DownloadAsync(release, null, default, background: true));
+        Assert.DoesNotContain(fixture.SetupUrl, fixture.Requests);
+    }
+
+    [Fact]
+    public async Task TurningOffBackgroundUpdatesCancelsStagingWithoutCancellingManualChecks()
+    {
+        using var fixture = new Fixture { Installed = true };
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        fixture.BeforeRequest = async (_, token) => { entered.SetResult(); await Task.Delay(Timeout.Infinite, token); };
+        using var controller = fixture.Controller();
+        Task staging = controller.StageInBackgroundAsync();
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        controller.CancelBackground();
+        await staging;
+        Assert.Equal(UpdateStatus.Cancelled, controller.State.Status);
+
+        fixture.BeforeRequest = null;
+        Task manual = controller.CheckAsync();
+        controller.CancelBackground();
+        await manual;
+        Assert.Equal(UpdateStatus.Available, controller.State.Status);
+        Assert.DoesNotContain(fixture.SetupUrl, fixture.Requests);
+    }
+
+    [Fact]
     public async Task CancellingTheSharedCheckReleasesSingleFlightForRetry()
     {
         using var fixture = new Fixture();
@@ -483,21 +568,28 @@ public sealed class UpdateTests
         Assert.Contains("unchanged", controller.State.Message);
     }
 
-    [Fact]
-    public async Task RechecksDownloadedInstallerAfterConsentAndRejectsTampering()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task RechecksDownloadedInstallerAfterConsentAndRejectsTampering(bool background)
     {
-        using var fixture = new Fixture();
+        using var fixture = new Fixture { Installed = background };
         int launches = 0;
-        using var controller = fixture.Controller(start: _ => { launches++; return true; });
+        bool Launch(string _) { launches++; return true; }
+        using var controller = fixture.Controller(start: Launch, restart: Launch);
         var before = Directory.GetDirectories(Path.GetTempPath(), "MissionView-update-*").ToHashSet();
-        await controller.CheckAsync();
-        await controller.DownloadAsync();
+        if (background) await controller.StageInBackgroundAsync();
+        else
+        {
+            await controller.CheckAsync();
+            await controller.DownloadAsync();
+        }
         string directory = Assert.Single(Directory.GetDirectories(Path.GetTempPath(), "MissionView-update-*").Except(before));
         await controller.InstallAsync(async (_, _) =>
         {
             await File.WriteAllBytesAsync(Path.Combine(directory, fixture.SetupName), new byte[fixture.SetupBytes.Length]);
             return true;
-        });
+        }, restart: background);
         Assert.Equal(UpdateStatus.Error, controller.State.Status);
         Assert.Contains("checksum changed", controller.State.Message);
         Assert.Equal(0, launches);
@@ -749,6 +841,7 @@ public sealed class UpdateTests
         internal int Disposals, Cleanups;
         internal bool HasRelease { get; init; }
         internal bool FailCleanup { get; init; }
+        public bool IsInstalled => false;
         private readonly UpdateRelease release = new(new(0, 1, 0), new string('a', 40),
             new("synthetic-not-an-executable", new Uri("https://example.invalid/synthetic"), 1, new string('a', 64)));
 
@@ -760,7 +853,8 @@ public sealed class UpdateTests
         public Task<UpdateRelease?> CheckAsync(UpdateVersion current, CancellationToken token) =>
             Task.FromResult<UpdateRelease?>(HasRelease ? release : null);
 
-        public Task<VerifiedUpdate> DownloadAsync(UpdateRelease value, IProgress<UpdateProgress>? progress, CancellationToken token) =>
+        public Task<VerifiedUpdate> DownloadAsync(UpdateRelease value, IProgress<UpdateProgress>? progress,
+            CancellationToken token, bool background) =>
             Task.FromResult(new VerifiedUpdate("synthetic-no-directory", "synthetic-no-file", value, () =>
             {
                 Interlocked.Increment(ref Cleanups);
@@ -793,6 +887,7 @@ public sealed class UpdateTests
         internal ConcurrentBag<string> Requests { get; } = new();
         internal Func<HttpRequestMessage, CancellationToken, Task>? BeforeRequest { get; set; }
         internal UpdateService Service { get; }
+        internal bool Installed { get; init; }
         internal string Version { get; }
         internal JsonObject Release { get; }
         internal JsonObject Reference { get; }
@@ -809,7 +904,7 @@ public sealed class UpdateTests
         internal Fixture(string version = "0.1.0")
         {
             Version = version;
-            Service = new UpdateService(new Handler(this));
+            Service = new UpdateService(new Handler(this), () => Installed);
             Reference = new() { ["object"] = new JsonObject { ["type"] = "tag", ["sha"] = TagSha } };
             Annotation = new()
             {
@@ -912,10 +1007,11 @@ public sealed class UpdateTests
         private string AssetUrl(string name) => $"https://github.com/JUANES545/missionview/releases/download/v{Version}/{name}";
         private static string Hash(byte[] bytes) => Convert.ToHexStringLower(SHA256.HashData(bytes));
         internal async Task<UpdateRelease> CheckAsync() => (await Service.CheckAsync(new(0, 0, 1), default))!;
-        internal UpdateController Controller(Action? shutdown = null, Func<string, bool>? start = null, Func<bool>? platform = null) =>
+        internal UpdateController Controller(Action? shutdown = null, Func<string, bool>? start = null,
+            Func<bool>? platform = null, Func<string, bool>? restart = null) =>
             new(Service, new(0, 0, 1), shutdown ?? (() => { }), start ?? (_ => throw new InvalidOperationException("Real installer forbidden in tests.")),
                 uiContext: null,
-                supportedPlatform: platform ?? (() => true));
+                supportedPlatform: platform ?? (() => true), restartInstaller: restart);
         public void Dispose() => Service.Dispose();
 
         internal static HttpResponseMessage StreamResponse(Stream stream, int chunk) =>

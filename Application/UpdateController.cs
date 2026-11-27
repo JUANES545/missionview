@@ -12,14 +12,17 @@ internal sealed class UpdateController : INotifyPropertyChanged, IDisposable
     private readonly UpdateVersion currentVersion;
     private readonly Action requestShutdown;
     private readonly Func<string, bool> startInstaller;
+    private readonly Func<string, bool>? restartInstaller;
     private readonly Func<bool> supportedPlatform;
     private readonly SynchronizationContext? context;
     private readonly object gate = new();
     private Task? operation;
     private CancellationTokenSource? cancellation;
+    private bool backgroundOperation;
     private UpdateRelease? release;
     private VerifiedUpdate? download;
-    private bool disposed;
+    private bool stagedInBackground;
+    private volatile bool disposed;
     private volatile bool installerStarted;
     private int generation;
     private UpdateState state = new(UpdateStatus.Idle, "Check for updates...");
@@ -28,32 +31,50 @@ internal sealed class UpdateController : INotifyPropertyChanged, IDisposable
     public event EventHandler<UpdateProgress>? ProgressChanged;
     public UpdateState State => state;
     public bool HasInstallerStarted => installerStarted;
+    internal bool IsInstalled => service.IsInstalled;
 
     internal UpdateController(IUpdateService service, UpdateVersion currentVersion, Action requestShutdown,
         Func<string, bool> startInstaller, SynchronizationContext? uiContext,
-        Func<bool> supportedPlatform)
+        Func<bool> supportedPlatform, Func<string, bool>? restartInstaller = null)
     {
         this.service = service;
         this.currentVersion = currentVersion;
         this.requestShutdown = requestShutdown;
         this.startInstaller = startInstaller ?? throw new ArgumentNullException(nameof(startInstaller));
         this.supportedPlatform = supportedPlatform ?? throw new ArgumentNullException(nameof(supportedPlatform));
+        this.restartInstaller = restartInstaller;
         context = uiContext ?? SynchronizationContext.Current;
     }
 
-    public Task CheckAsync() => RunAsync(async token =>
+    public Task CheckAsync() => RunAsync(token => CheckForReleaseAsync(token, background: false));
+
+    internal Task StageInBackgroundAsync() => RunAsync(async token =>
     {
+        if (!IsInstalled || State.Status == UpdateStatus.ReadyToInstall) return;
+        await CheckForReleaseAsync(token, background: true).ConfigureAwait(false);
+    }, background: true);
+
+    private async Task CheckForReleaseAsync(CancellationToken token, bool background)
+    {
+        token.ThrowIfCancellationRequested();
         ClearDownload();
         release = null;
         await SetStateAsync(new(UpdateStatus.Checking, "Checking for updates...", true, true)).ConfigureAwait(false);
         release = await service.CheckAsync(currentVersion, token).ConfigureAwait(false);
         token.ThrowIfCancellationRequested();
+        if (background && release is not null)
+        {
+            await DownloadReleaseAsync(token, background: true).ConfigureAwait(false);
+            return;
+        }
         await SetStateAsync(release is null
             ? new(UpdateStatus.UpToDate, "You're up to date.")
             : new(UpdateStatus.Available, $"MissionView {release.Version} is available.", AvailableVersion: release.Version)).ConfigureAwait(false);
-    });
+    }
 
-    public Task DownloadAsync() => RunAsync(async token =>
+    public Task DownloadAsync() => RunAsync(token => DownloadReleaseAsync(token, background: false));
+
+    private async Task DownloadReleaseAsync(CancellationToken token, bool background)
     {
         if (release is null) throw new UpdateException("Check for an available update before downloading.");
         EnsurePlatform();
@@ -61,18 +82,28 @@ internal sealed class UpdateController : INotifyPropertyChanged, IDisposable
         int currentGeneration = generation;
         await SetStateAsync(new(UpdateStatus.Downloading, "Downloading update...", true, true, AvailableVersion: release.Version)).ConfigureAwait(false);
         download = await service.DownloadAsync(release,
-            new DownloadProgress(progress => PublishProgress(progress, currentGeneration)), token).ConfigureAwait(false);
-        token.ThrowIfCancellationRequested();
+            new DownloadProgress(progress => PublishProgress(progress, currentGeneration)), token, background).ConfigureAwait(false);
+        if (token.IsCancellationRequested)
+        {
+            ClearDownload();
+            token.ThrowIfCancellationRequested();
+        }
+        stagedInBackground = background;
         await SetStateAsync(new(UpdateStatus.ReadyToInstall,
             "Installer integrity verified. Publisher signature not verified by MissionView; review compatibility and Windows warnings.",
             Progress: 1, AvailableVersion: release.Version)).ConfigureAwait(false);
-    });
+    }
 
-    public Task InstallAsync(Func<UpdateRelease, CancellationToken, Task<bool>> confirm) => RunAsync(async token =>
+    public Task InstallAsync(Func<UpdateRelease, CancellationToken, Task<bool>> confirm, bool restart = false) => RunAsync(async token =>
     {
         ArgumentNullException.ThrowIfNull(confirm);
         if (download is null || release is null) throw new UpdateException("Download and verify the installer before installing.");
+        if ((stagedInBackground && !restart) || (restart && State.Status != UpdateStatus.ReadyToInstall))
+            throw new UpdateException("Use Restart to update once the background download is ready.");
         EnsurePlatform();
+        var launch = restart ? restartInstaller : startInstaller;
+        if (launch is null || (restart && !IsInstalled))
+            throw new UpdateException("Restarting to update requires a registered MissionView installation.");
         await SetStateAsync(new(UpdateStatus.AwaitingConfirmation, "Confirm installation. MissionView has not verified the publisher signature.", true,
             AvailableVersion: release.Version)).ConfigureAwait(false);
         bool approved = await OnContextAsync(() => confirm(release, token)).ConfigureAwait(false);
@@ -89,7 +120,7 @@ internal sealed class UpdateController : INotifyPropertyChanged, IDisposable
         await SetStateAsync(new(UpdateStatus.StartingInstaller, "Starting installer...", true, true,
             AvailableVersion: release.Version)).ConfigureAwait(false);
         token.ThrowIfCancellationRequested();
-        if (!startInstaller(download.InstallerPath))
+        if (!launch(download.InstallerPath))
             throw new UpdateException("The installer could not be started. Your current installation is unchanged.");
         installerStarted = true;
         download.RetainForInstaller();
@@ -116,12 +147,19 @@ internal sealed class UpdateController : INotifyPropertyChanged, IDisposable
         lock (gate) cancellation?.Cancel();
     }
 
-    private Task RunAsync(Func<CancellationToken, Task> action)
+    internal void CancelBackground()
+    {
+        lock (gate)
+            if (backgroundOperation) cancellation?.Cancel();
+    }
+
+    private Task RunAsync(Func<CancellationToken, Task> action, bool background = false)
     {
         TaskCompletionSource completion;
         CancellationTokenSource source;
         lock (gate)
         {
+            if (background && (disposed || installerStarted)) return Task.CompletedTask;
             if (installerStarted)
             {
                 var error = new UpdateException("The installer has already started in this session. Follow the Windows installer and restart MissionView before checking again. No second installer will be started.");
@@ -132,6 +170,7 @@ internal sealed class UpdateController : INotifyPropertyChanged, IDisposable
             if (operation is { IsCompleted: false }) return operation;
             source = new CancellationTokenSource();
             cancellation = source;
+            backgroundOperation = background;
             generation++;
             completion = new(TaskCreationOptions.RunContinuationsAsynchronously);
             operation = completion.Task;
@@ -151,7 +190,7 @@ internal sealed class UpdateController : INotifyPropertyChanged, IDisposable
         {
             bool cancelled = ex is OperationCanceledException && source.IsCancellationRequested;
             bool expected = cancelled || IsOperationError(ex);
-            if (!cancelled) Trace.TraceError($"Manual update failed: {ex}");
+            if (!cancelled) Trace.TraceError($"Update failed: {ex}");
             if (!expected) unexpected = ex;
             string message = installerStarted
                 ? "The installer started, but MissionView could not finish its shutdown. Installation is not confirmed."
@@ -164,7 +203,7 @@ internal sealed class UpdateController : INotifyPropertyChanged, IDisposable
             }
             catch (Exception reportingFailure)
             {
-                Trace.TraceError($"Could not report the manual update failure to the UI: {reportingFailure}");
+                Trace.TraceError($"Could not report the update failure to the UI: {reportingFailure}");
                 unexpected = new AggregateException(ex, reportingFailure);
             }
         }
@@ -222,9 +261,9 @@ internal sealed class UpdateController : INotifyPropertyChanged, IDisposable
         else context.Post(_ => Publish(), null);
     }
 
-    private Task SetStateAsync(UpdateState value) => OnContextAsync(() =>
+    private Task SetStateAsync(UpdateState value) => disposed ? Task.CompletedTask : OnContextAsync(() =>
     {
-        SetState(value);
+        if (!disposed) SetState(value);
         return Task.FromResult(true);
     });
 
@@ -256,6 +295,7 @@ internal sealed class UpdateController : INotifyPropertyChanged, IDisposable
     {
         download?.Dispose();
         download = null;
+        stagedInBackground = false;
     }
 
     public void Dispose()
