@@ -15,9 +15,11 @@ internal sealed class UpdateService : IUpdateService
     private const long MaximumInstallerSize = 512L * 1024 * 1024;
     private const int MaximumMetadataSize = 2 * 1024 * 1024;
     private readonly HttpClient client;
+    private readonly Func<bool>? isInstalled;
+    public bool IsInstalled => isInstalled?.Invoke() == true;
 
     // Injected handlers must also leave redirects to this service, so every hop is checked before sending.
-    internal UpdateService(HttpMessageHandler? handler = null)
+    internal UpdateService(HttpMessageHandler? handler = null, Func<bool>? isInstalled = null)
     {
         if (handler is HttpClientHandler { AllowAutoRedirect: true } ||
             handler is SocketsHttpHandler { AllowAutoRedirect: true })
@@ -27,6 +29,7 @@ internal sealed class UpdateService : IUpdateService
             Timeout = Timeout.InfiniteTimeSpan
         };
         client.DefaultRequestHeaders.UserAgent.ParseAdd("MissionView-ManualUpdater/1.0");
+        this.isInstalled = isInstalled;
     }
 
     internal async Task<UpdateRelease?> CheckAsync(UpdateVersion currentVersion, CancellationToken cancellationToken)
@@ -130,8 +133,12 @@ internal sealed class UpdateService : IUpdateService
         return new UpdateRelease(version, sourceSha, byName[setup]);
     }
 
-    internal async Task<VerifiedUpdate> DownloadAsync(UpdateRelease release, IProgress<UpdateProgress>? progress, CancellationToken cancellationToken)
+    internal async Task<VerifiedUpdate> DownloadAsync(UpdateRelease release, IProgress<UpdateProgress>? progress,
+        CancellationToken cancellationToken, bool background = false)
     {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (background && !IsInstalled)
+            throw new UpdateException("Background downloads require a registered MissionView installation.");
         var asset = release.Installer;
         Require(asset.Name == $"MissionView-{release.Version}-Setup.exe" &&
             asset.Url.AbsoluteUri == $"https://github.com/{Repository}/releases/download/v{release.Version}/{asset.Name}" &&
@@ -192,8 +199,8 @@ internal sealed class UpdateService : IUpdateService
     }
 
     Task<UpdateRelease?> IUpdateService.CheckAsync(UpdateVersion current, CancellationToken token) => CheckAsync(current, token);
-    Task<VerifiedUpdate> IUpdateService.DownloadAsync(UpdateRelease release, IProgress<UpdateProgress>? progress, CancellationToken token) =>
-        DownloadAsync(release, progress, token);
+    Task<VerifiedUpdate> IUpdateService.DownloadAsync(UpdateRelease release, IProgress<UpdateProgress>? progress,
+        CancellationToken token, bool background) => DownloadAsync(release, progress, token, background);
     async Task<IAsyncDisposable> IUpdateService.LockVerifiedInstallerAsync(VerifiedUpdate update, CancellationToken token) =>
         await OpenVerifiedInstallerAsync(update, token).ConfigureAwait(false);
 

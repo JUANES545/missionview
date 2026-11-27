@@ -4,6 +4,73 @@ using static WindowScatter.Win32Interop;
 
 public class WindowActivationTests
 {
+    [Theory]
+    [InlineData(false, false, true, false)]
+    [InlineData(false, true, true, true)]
+    [InlineData(true, false, true, true)]
+    [InlineData(true, true, true, true)]
+    [InlineData(false, true, false, false)]
+    [InlineData(true, false, false, false)]
+    public void PendingCloseRestoresOnlyExplicitReturnsOrOwnedPromptsWithoutForcingMaximization(
+        bool explicitReturn, bool ownedPrompt, bool minimized, bool restored)
+    {
+        var original = new WindowActivationTarget(new(20), 3, 4);
+        var target = ownedPrompt ? new WindowActivationTarget(new(30), 5, 4) : original;
+        IntPtr active = new(99);
+        var shown = new List<(IntPtr, int)>();
+        var activation = new WindowActivation(_ => (target.ThreadId, target.ProcessId),
+            (handle, command) => shown.Add((handle, command)),
+            handle => { active = handle; return true; }, () => active, _ => minimized);
+
+        Assert.True(activation.CloseOverviewForPendingClose(target, original, explicitReturn,
+            new HashSet<IntPtr> { new(99) }, () => { }, () => true));
+        Assert.Equal(target.Handle, active);
+        if (restored) Assert.Equal((target.Handle, SW_RESTORE), Assert.Single(shown));
+        else Assert.Empty(shown);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void AutomaticSourceAttentionDoesNotRestoreAWindowThatMinimizesDuringHiding(bool stillActive)
+    {
+        var original = new WindowActivationTarget(new(20), 3, 4);
+        IntPtr active = original.Handle;
+        var close = new WindowClose(_ => original, _ => (true, 0),
+            _ => new(original, IntPtr.Zero, true, true), foreground: () => active);
+        close.Request(original);
+        Assert.Equal(original, close.FindAttentionTarget());
+        if (!stillActive) active = new(99);
+        bool minimized = false;
+        var activation = new WindowActivation(_ => (original.ThreadId, original.ProcessId),
+            (_, _) => throw new Exception("Automatic source attention must not restore a closing window."),
+            handle => { active = handle; return true; }, () => active, _ => minimized);
+
+        Assert.True(activation.CloseOverviewForPendingClose(original, original, explicitReturn: false,
+            new HashSet<IntPtr> { new(99) }, () => minimized = true, () => true));
+        Assert.Equal(original.Handle, active);
+        Assert.True(minimized);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void PendingCloseHandoffNeverMutatesAChangedIdentityOrStealsExternalForeground(bool identityChanged)
+    {
+        var original = new WindowActivationTarget(new(20), 3, 4);
+        IntPtr active = identityChanged ? new(99) : new(88);
+        var identity = original;
+        var activation = new WindowActivation(_ => (identity.ThreadId, identity.ProcessId),
+            (_, _) => throw new Exception("Invalid or externally focused target must not be restored."),
+            _ => throw new Exception("Invalid or externally focused target must not be activated."),
+            () => active, _ => true);
+        Assert.False(activation.CloseOverviewForPendingClose(original, original, explicitReturn: true,
+            new HashSet<IntPtr> { new(99) },
+            () => { if (identityChanged) identity = original with { ThreadId = 9 }; },
+            () => identity == original));
+        Assert.Equal(identityChanged ? new IntPtr(99) : new IntPtr(88), active);
+    }
+
     [Fact]
     public void PendingCloseCancellationReturnsToRequestedBInsteadOfPreviousAWithoutReplayingClose()
     {
@@ -118,7 +185,7 @@ public class WindowActivationTests
                 ? (popup.ThreadId, popup.ProcessId) : (original.ThreadId, original.ProcessId),
             (_, _) => throw new Exception("Visible prompt must not be restored."),
             handle => { activated++; active = handle; return true; }, () => active, _ => false);
-        bool result = activation.CloseOverviewAndActivate(popup, true, false, new HashSet<IntPtr> { new(99) },
+        bool result = activation.CloseOverviewForPendingClose(popup, original, explicitReturn: false, new HashSet<IntPtr> { new(99) },
             () =>
             {
                 close.EndSession();
@@ -172,8 +239,8 @@ public class WindowActivationTests
         var activation = new WindowActivation(_ => (target.ThreadId, target.ProcessId),
             (_, _) => restored++, handle => { activated++; active = handle; return true; },
             () => active, _ => minimized);
-        activation.CloseOverviewAndActivate(close.ResolveReturnTarget()!.Value, true, false,
-            new HashSet<IntPtr> { new(99) }, () => { });
+        activation.CloseOverviewForPendingClose(close.ResolveReturnTarget()!.Value, target, explicitReturn: true,
+            new HashSet<IntPtr> { new(99) }, () => { }, () => close.IsReturnTargetValid(target, target));
         Assert.Equal(ownForeground ? 1 : 0, activated);
         Assert.Equal(ownForeground && minimized ? 1 : 0, restored);
         Assert.Equal(ownForeground ? target.Handle : new(88), active);

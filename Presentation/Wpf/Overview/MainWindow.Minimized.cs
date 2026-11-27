@@ -36,16 +36,38 @@ namespace WindowScatter
             if (coordinator.selectedWindowHandle != IntPtr.Zero && coordinator.ViewFor(coordinator.selectedWindowHandle) == null)
                 coordinator.SelectWindow(IntPtr.Zero);
             ChromeCanvas.Visibility = Visibility.Visible;
+            RefreshEmptyOverview(windows.Count);
+            MoveStatus.Text = IdleMoveStatus;
+            if (!settled) return;
+            thumbnailManager.CompleteTransition(currentDpiScale, selectedWindowHandle);
+            minimizedStrip?.SetSelectionOutlinesVisible(true);
+            animationManager.StartKeepAlive();
+        }
+
+        private bool TryKeepThumbnailsAfterClose(IReadOnlyList<IntPtr> sourceOrder, List<WindowInfo> windows)
+        {
+            windows = windows.Where(w => IncludeMinimizedWindows || !w.WasMinimized).ToList();
+            var minimized = windows.Where(w => w.WasMinimized).ToList();
+            if (currentDpiScale != monitor.DpiScale || monitorPixelWidth != monitor.Width || monitorPixelHeight != monitor.Height ||
+                (minimizedStrip == null ? minimized.Count != 0 : !minimizedStrip.CanKeepWindowsAfterClose(minimized)) ||
+                !thumbnailManager.TryKeepLayoutAfterClose(windows.Where(w => !w.WasMinimized).ToList(), sourceOrder)) return false;
+            enumeratedWindowCount = windows.Count;
+            InvalidateNavigation();
+            LayoutCalculatorForDisplay().KeepRegisteredIdentities(windowThumbs.Select(t => t.Identity));
+            RefreshEmptyOverview(windows.Count);
+            MoveStatus.Text = IdleMoveStatus;
+            animationManager.StartKeepAlive();
+            return true;
+        }
+
+        private void RefreshEmptyOverview(int windowCount)
+        {
             string destinationHint = views.Count > 1 ? "\nDrop a window here." : "";
-            EmptyMessage.Text = windows.Count == 0 ? coordinator.appExposeRequest != null
+            EmptyMessage.Text = windowCount == 0 ? coordinator.appExposeRequest != null
                 ? "No windows from this application on this display." + destinationHint
                 : "No windows on this display." + destinationHint :
                 "Window previews unavailable." + destinationHint;
             EmptyMessage.Visibility = !ViewThumbs.Any() ? Visibility.Visible : Visibility.Hidden;
-            MoveStatus.Text = IdleMoveStatus;
-            if (!settled) return;
-            thumbnailManager.CompleteTransition(currentDpiScale, selectedWindowHandle);
-            animationManager.StartKeepAlive();
         }
 
         private void RebuildMinimizedStrip(List<WindowInfo> windows, bool settled)
@@ -64,6 +86,7 @@ namespace WindowScatter
                     coordinator.SelectWindow(handle);
                 }, selectionBorderColor: () => settings.SelectionBorderColor)
             { Visibility = settled ? Visibility.Visible : Visibility.Hidden };
+            minimizedStrip.SetSelectionOutlinesVisible(settled);
             foreach (var thumb in minimizedStrip.Thumbs) ConfigureCloseInput(thumb);
             minimizedStrip.ApplyPalette(SystemParameters.HighContrast);
             Panel.SetZIndex(minimizedStrip, 2);

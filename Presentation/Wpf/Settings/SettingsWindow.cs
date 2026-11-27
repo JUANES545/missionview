@@ -14,7 +14,7 @@ using System.Windows.Media;
 
 namespace WindowScatter;
 
-internal sealed class SettingsWindow : Window
+internal sealed partial class SettingsWindow : Window
 {
     private readonly AppSettings source;
     private readonly Func<AppSettings, bool> apply;
@@ -32,6 +32,7 @@ internal sealed class SettingsWindow : Window
     private readonly ComboBox position = new();
     private readonly ComboBox selectionBorder = new();
     private readonly ComboBox overviewMonitors = new();
+    private readonly CheckBox desktopStrip = new() { Content = "Show the virtual desktop strip when available" };
     private readonly ComboBox thumbnailSize = new();
     private readonly Slider dimming = new() { Minimum = 0, Maximum = 100, TickFrequency = 5,
         SmallChange = 1, LargeChange = 10, IsMoveToPointEnabled = true };
@@ -44,6 +45,7 @@ internal sealed class SettingsWindow : Window
     private readonly TextBlock exposeHint = new() { TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 16) };
     private readonly StackPanel updatePanel = new();
     private readonly TabControl categories = new();
+    private ScrollViewer? PageScroll => (ScrollViewer?)categories.Template.FindName(nameof(PageScroll), categories);
     private readonly List<Grid> preferenceRows = [];
     private readonly List<(Button Button, TextBlock Detail)> contextualHelp = [];
     private string hotkey;
@@ -72,19 +74,22 @@ internal sealed class SettingsWindow : Window
         Width = Math.Min(720, SystemParameters.WorkArea.Width);
         Height = Math.Min(480, SystemParameters.WorkArea.Height);
         MaxHeight = SystemParameters.WorkArea.Height;
-        MinWidth = Math.Min(320, SystemParameters.WorkArea.Width);
+        MinWidth = Math.Min(376, SystemParameters.WorkArea.Width);
         MinHeight = Math.Min(300, MaxHeight);
         WindowStartupLocation = WindowStartupLocation.CenterScreen;
-        Background = SystemParameters.HighContrast ? SystemColors.WindowBrush : SharedBrushes.Graphite;
+        // Leave the native caption lane transparent so DWM can paint its buttons.
+        Background = Brushes.Transparent;
         Foreground = SystemParameters.HighContrast ? SystemColors.WindowTextBrush : SharedBrushes.Text;
         FontFamily = new FontFamily("Segoe UI Variable, Segoe UI");
         FontSize = 14;
         hotCorners.Foreground = startup.Foreground = minimized.Foreground = reduceAnimations.Foreground = Foreground;
         UseLayoutRounding = true;
         ApplyControlStyles();
-        var root = new DockPanel { Margin = new Thickness(20), LastChildFill = true };
+        InitializeCategoryTemplate();
+        var root = new DockPanel { LastChildFill = true };
         Content = root;
-        var footer = new StackPanel { Margin = new Thickness(0, 16, 0, 0) };
+        var footer = new StackPanel();
+        footer.SetResourceReference(Panel.BackgroundProperty, "SettingsSurface");
         DockPanel.SetDock(footer, Dock.Bottom);
         root.Children.Add(footer);
         AutomationProperties.SetLiveSetting(feedback, AutomationLiveSetting.Assertive);
@@ -99,86 +104,68 @@ internal sealed class SettingsWindow : Window
         noFeedback.Setters.Add(new Setter(VisibilityProperty, Visibility.Collapsed));
         feedbackStyle.Triggers.Add(noFeedback);
         feedback.Style = feedbackStyle;
-        footer.Children.Add(new ScrollViewer { Content = feedback, MaxHeight = 84,
+        footer.Children.Add(new ScrollViewer { Content = feedback, MaxHeight = 84, Margin = new Thickness(20, 0, 20, 0),
             VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled });
-        KeyboardNavigation.SetTabIndex(footer, 100);
-        var body = new DockPanel { VerticalAlignment = VerticalAlignment.Top };
-        var bodyScroll = new ScrollViewer { Content = body, VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
-            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled, Focusable = false,
-            VerticalContentAlignment = VerticalAlignment.Top };
-        root.Children.Add(bodyScroll);
-        var brand = new Grid();
-        brand.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        brand.ColumnDefinitions.Add(new ColumnDefinition());
-        using (var stream = typeof(SettingsWindow).Assembly.GetManifestResourceStream("MissionView.TrayIcon.ico"))
-        {
-            if (stream != null)
-            {
-                var bitmap = System.Windows.Media.Imaging.BitmapFrame.Create(stream,
-                    System.Windows.Media.Imaging.BitmapCreateOptions.None, System.Windows.Media.Imaging.BitmapCacheOption.OnLoad);
-                var image = new DecorativeImage { Source = bitmap, Width = 28, Height = 28, IsHitTestVisible = false, Margin = new Thickness(0, 0, 10, 0) };
-                brand.Children.Add(image);
-            }
-        }
-        var heading = new TextBlock { Text = "Settings", FontSize = 22, FontWeight = FontWeights.SemiBold, TextWrapping = TextWrapping.Wrap };
-        Grid.SetColumn(heading, 1);
-        brand.Children.Add(heading);
-        brand.Margin = new Thickness(0, 0, 0, 20);
-        DockPanel.SetDock(brand, Dock.Top);
-        body.Children.Add(brand);
-        categories.Background = Background;
+        KeyboardNavigation.SetTabIndex(footer, 2);
+        root.Children.Add(CreateTitleBar());
+        categories.SetResourceReference(Control.BackgroundProperty, "SettingsSurface");
         categories.Foreground = Foreground;
         categories.BorderThickness = new Thickness(0);
         categories.Padding = new Thickness(0);
         categories.VerticalContentAlignment = VerticalAlignment.Top;
         categories.HorizontalContentAlignment = HorizontalAlignment.Stretch;
-        KeyboardNavigation.SetTabIndex(categories, 0);
-        body.Children.Add(categories);
+        KeyboardNavigation.SetTabNavigation(categories, KeyboardNavigationMode.Local);
+        root.Children.Add(CreateSearchBody());
         var general = AddCategory("General");
         var shortcuts = AddCategory("Shortcuts");
         var corners = AddCategory("Hot corners");
         var about = AddCategory("Updates & About");
+        var experimental = AddCategory("Experimental");
+        desktopStrip.IsChecked = source.EnableVirtualDesktopStrip;
+        AddPreference(experimental, "virtual-desktop-strip", "Virtual desktops", desktopStrip,
+            UnavailableOverviewDesktops.Reason, "virtual desktop switch move spaces");
         startup.IsChecked = source.RunOnStartup;
-        AddPreference(general, "Startup", startup, "Open MissionView when you sign in to Windows.");
+        AddPreference(general, "startup", "Startup", startup, "Open MissionView when you sign in to Windows.", "start with Windows login");
         foreach (var color in new[] { "White", "Blue", "Mint" })
             selectionBorder.Items.Add(new ComboBoxItem { Content = color, Tag = color });
         RestoreSelectionBorder(source);
-        AddPreference(general, "Selection border", selectionBorder,
-            "Choose the outline color for selected window previews in Overview and App Exposé. High contrast uses the Windows highlight color.");
+        AddPreference(general, "selection-border", "Selection border", selectionBorder,
+            "Choose the outline color for selected window previews in Overview and App Exposé. High contrast uses the Windows highlight color.", "outline color");
         overviewMonitors.Items.Add(new ComboBoxItem { Content = "All displays", Tag = "All" });
         overviewMonitors.Items.Add(new ComboBoxItem { Content = "Current display", Tag = "Current" });
         SelectItem(overviewMonitors, source.OverviewMonitorScope);
-        AddPreference(general, "Overview displays", overviewMonitors,
-            "Show only the display under the pointer when the overview opens. Moving windows between displays is unavailable in this mode.");
+        AddPreference(general, "overview-displays", "Overview displays", overviewMonitors,
+            "Show only the display under the pointer when the overview opens. Moving windows between displays is unavailable in this mode.", "monitors screens");
         foreach (var size in new[] { "Compact", "Standard", "Large" })
             thumbnailSize.Items.Add(new ComboBoxItem { Content = size, Tag = size });
         SelectItem(thumbnailSize, source.ThumbnailSize);
-        AddPreference(general, "Thumbnail size", thumbnailSize,
-            "Choose the size of window previews. Previews shrink when needed to fit the display.");
+        AddPreference(general, "thumbnail-size", "Thumbnail size", thumbnailSize,
+            "Choose the size of window previews. Previews shrink when needed to fit the display.", "window preview size");
         dimming.Value = source.BackgroundDimming;
         dimming.SetResourceReference(Control.ForegroundProperty, "FieldFocus");
-        AddPreference(general, "Background dimming", dimming,
-            "Dim the desktop behind window previews, from 0 to 100 percent. High contrast uses an opaque Windows background.");
+        AddPreference(general, "background-dimming", "Background dimming", dimming,
+            "Dim the desktop behind window previews, from 0 to 100 percent. High contrast uses an opaque Windows background.", "opacity desktop");
         minimized.IsChecked = source.ShowMinimizedWindows;
         overviewMinimized.IsChecked = source.ShowMinimizedWindowsInOverview;
-        AddPreference(general, "Minimized in Overview", overviewMinimized,
+        AddPreference(general, "overview-minimized", "Minimized in Overview", overviewMinimized,
             "List minimized windows in a separate shelf. Select a window to restore it.");
-        AddPreference(general, "Minimized windows", minimized,
-            "Include minimized windows from the application under the pointer in the App Exposé shelf.");
+        AddPreference(general, "app-expose-minimized", "Minimized windows", minimized,
+            "Include minimized windows from the application under the pointer in the App Exposé shelf.", "app expose app exposé");
         reduceAnimations.IsChecked = source.ReduceAnimations;
-        AddPreference(general, "Animations", reduceAnimations,
-            "Open, close and enlarge previews without animated movement. Windows reduced-motion settings also apply.");
+        AddPreference(general, "animations", "Animations", reduceAnimations,
+            "Open, close and enlarge previews without animated movement. Windows reduced-motion settings also apply.", "reduce motion");
         var reset = new Button { Content = "Reset settings" };
         reset.Click += (_, _) =>
         {
             if (this.confirmReset()) ApplyCompletedChange(new AppSettings(), reset: true);
         };
-        AddPreference(general, "Reset settings", reset,
-            "Restore the default preferences after confirmation.");
-        AddPreference(shortcuts, "Overview shortcut", shortcut, "Record a shortcut with Ctrl, Alt or Win. Press Escape to cancel recording.");
+        AddPreference(general, "reset", "Reset settings", reset,
+            "Restore the default preferences after confirmation.", "restore defaults");
+        AddPreference(shortcuts, "overview-shortcut", "Overview shortcut", shortcut,
+            "Record a shortcut with Ctrl, Alt or Win. Press Escape to cancel recording.", "hotkey keyboard");
         var useAltTab = new Button { Content = "Use Alt+Tab" };
-        AddPreference(shortcuts, "Windows switcher", useAltTab,
-            "Use left Alt+Tab for Overview instead of the Windows switcher while MissionView is running.");
+        AddPreference(shortcuts, "windows-switcher", "Windows switcher", useAltTab,
+            "Use left Alt+Tab for Overview instead of the Windows switcher while MissionView is running.", "alt+tab alt tab");
         AutomationProperties.SetName(useAltTab, "Use Alt+Tab");
         useAltTab.Click += (_, _) =>
         {
@@ -190,7 +177,8 @@ internal sealed class SettingsWindow : Window
             }
             if (source.Hotkey != "Alt+Tab") Change(p => p.Hotkey = "Alt+Tab");
         };
-        AddPreference(shortcuts, "App Exposé shortcut", appExposeShortcut, "Open windows from the application under the pointer. Record a separate shortcut with Ctrl, Alt or Win. By default this follows Overview with Shift, except when Overview uses Alt+Tab.");
+        AddPreference(shortcuts, "app-expose-shortcut", "App Exposé shortcut", appExposeShortcut,
+            "Open windows from the application under the pointer. Record a separate shortcut with Ctrl, Alt or Win. By default this follows Overview with Shift, except when Overview uses Alt+Tab.", "app expose hotkey keyboard");
         foreach (var recorder in new[] { shortcut, appExposeShortcut })
         {
             recorder.ContentTemplate = RecorderContentTemplate();
@@ -225,15 +213,17 @@ internal sealed class SettingsWindow : Window
         shortcuts.Children.Add(exposeHint);
         RefreshShortcutHint();
         hotCorners.IsChecked = source.EnableHotCorners;
-        AddPreference(corners, "Activation", hotCorners, "Keep the pointer in the selected corner for the chosen delay to open the overview.");
+        AddPreference(corners, "hot-corner-activation", "Activation", hotCorners,
+            "Keep the pointer in the selected corner for the chosen delay to open the overview.", "enable hot corners");
         foreach (var corner in new[] { "TopLeft", "TopRight", "BottomLeft", "BottomRight" })
             position.Items.Add(new ComboBoxItem { Content = CornerLabel(corner), Tag = corner });
         position.SelectedIndex = Array.FindIndex(new[] { "TopLeft", "TopRight", "BottomLeft", "BottomRight" },
             value => value.Equals(source.HotCornerPosition, StringComparison.OrdinalIgnoreCase));
-        AddPreference(corners, "Corner", position);
+        AddPreference(corners, "hot-corner-position", "Corner", position, keywords: "hot corner position");
         delay.Text = source.HotCornerDelay.ToString(CultureInfo.CurrentCulture);
         delay.TextChanged += (_, _) => delay.Tag = null;
-        AddPreference(corners, "Delay (milliseconds)", delay, "Enter zero or more milliseconds, then press Enter to apply.");
+        AddPreference(corners, "hot-corner-delay", "Delay (milliseconds)", delay,
+            "Enter zero or more milliseconds, then press Enter to apply.", "hot corner timeout");
         void SetCornerEnabled()
         {
             position.IsEnabled = delay.IsEnabled = hotCorners.IsChecked == true;
@@ -243,22 +233,31 @@ internal sealed class SettingsWindow : Window
         SetCornerEnabled();
         var version = (typeof(SettingsWindow).Assembly.GetName().Version
             ?? throw new InvalidOperationException("The MissionView application version is missing.")).ToString(3);
-        about.Children.Add(new TextBlock { Text = $"MissionView v{version}", FontSize = 18, FontWeight = FontWeights.SemiBold,
-            Margin = new Thickness(0, 0, 0, 12), TextWrapping = TextWrapping.Wrap });
+        var versionLabel = new TextBlock { Text = $"MissionView v{version}", FontSize = 18, FontWeight = FontWeights.SemiBold,
+            Margin = new Thickness(0, 0, 0, 12), TextWrapping = TextWrapping.Wrap };
+        about.Children.Add(versionLabel);
         about.Children.Add(updatePanel);
         updatePanel.Children.Add(updates);
-        about.Children.Add(new TextBlock { Text = "MIT license.",
-            TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 20, 0, 0) });
+        if (updates is UpdatePanel panel)
+        {
+            RegisterSearchRow(panel, panel.ActionRow, "Check for updates", "download install upgrade restart");
+            if (panel.AutomaticRow is { } automatic)
+                RegisterSearchRow(panel, automatic, UpdatePanel.AutomaticUpdatesKey, "auto update background");
+        }
+        var license = new TextBlock { Text = "MIT license.",
+            TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 20, 0, 0) };
+        about.Children.Add(license);
         var credits = new StackPanel { Margin = new Thickness(0, 16, 0, 0) };
-        AddProjectLink(credits, "Original", "miguelo96/WindowScatter", "https://github.com/miguelo96/WindowScatter");
-        AddProjectLink(credits, "Based on", "RuoChen5251/WindowScatter", "https://github.com/RuoChen5251/WindowScatter");
-        AddProjectLink(credits, "Repository", "JUANES545/missionview", "https://github.com/JUANES545/missionview");
+        AddProjectLink(credits, "original-project", "Original", "miguelo96/WindowScatter", "https://github.com/miguelo96/WindowScatter");
+        AddProjectLink(credits, "upstream-project", "Based on", "RuoChen5251/WindowScatter", "https://github.com/RuoChen5251/WindowScatter");
+        AddProjectLink(credits, "repository", "Repository", "JUANES545/missionview", "https://github.com/JUANES545/missionview");
         about.Children.Add(credits);
         categories.SelectionChanged += (_, e) =>
         {
             if (!ReferenceEquals(e.Source, categories)) return;
             if (IsRecordingShortcut) StopRecording();
             CollapseContextualHelp();
+            if (filterScroll.Visibility != Visibility.Visible) PageScroll?.ScrollToTop();
         };
         categories.SizeChanged += (_, _) => ReflowPreferences();
         BindCompletedChanges();
@@ -270,6 +269,14 @@ internal sealed class SettingsWindow : Window
         };
         PreviewKeyDown += (_, e) =>
         {
+            if (e.Key == Key.Escape && filterScroll.Visibility == Visibility.Visible &&
+                (position.IsDropDownOpen || selectionBorder.IsDropDownOpen || overviewMonitors.IsDropDownOpen || thumbnailSize.IsDropDownOpen))
+                return;
+            if (HandleSearchKey(e.Key, e.KeyboardDevice.Modifiers))
+            {
+                e.Handled = true;
+                return;
+            }
             if (e.Key == Key.Escape)
             {
                 if (IsRecordingShortcut) StopRecording();
@@ -279,12 +286,19 @@ internal sealed class SettingsWindow : Window
                 e.Handled = true;
             }
         };
-        Loaded += (_, _) => startup.Focus();
+        Loaded += (_, _) =>
+        {
+            if (categories.SelectedItem is TabItem selectedTab) selectedTab.Focus();
+        };
     }
 
-    internal void ShowUpdates() => categories.SelectedIndex = 3;
+    internal void ShowUpdates()
+    {
+        searchBox.Clear();
+        categories.SelectedIndex = 3;
+    }
 
-    private void AddProjectLink(Panel parent, string label, string project, string url)
+    private void AddProjectLink(Panel parent, string id, string label, string project, string url)
     {
         var address = new Uri(url);
         var line = new TextBlock { TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 8) };
@@ -320,6 +334,8 @@ internal sealed class SettingsWindow : Window
         };
         line.Inlines.Add(link);
         parent.Children.Add(line);
+        AutomationProperties.SetAutomationId(line, id);
+        RegisterSearchRow(parent, line, label, project);
     }
 
     protected override void OnSourceInitialized(EventArgs e)
@@ -371,11 +387,9 @@ internal sealed class SettingsWindow : Window
         if (e.PropertyName != nameof(SystemParameters.HighContrast)) return;
         Dispatcher.Invoke(() =>
         {
-            Background = SystemParameters.HighContrast ? SystemColors.WindowBrush : SharedBrushes.Graphite;
             Foreground = SystemParameters.HighContrast ? SystemColors.WindowTextBrush : SharedBrushes.Text;
             hotCorners.Foreground = startup.Foreground = minimized.Foreground = reduceAnimations.Foreground = Foreground;
             overviewMinimized.Foreground = Foreground;
-            categories.Background = Background;
             categories.Foreground = Foreground;
             foreach (var row in preferenceRows)
                 ((Label)row.Children[0]).Foreground = Foreground;
@@ -386,12 +400,13 @@ internal sealed class SettingsWindow : Window
 
     private StackPanel AddCategory(string title)
     {
-        var form = new StackPanel { Margin = new Thickness(0, 16, 0, 4) };
-        categories.Items.Add(new TabItem { Header = title, Content = form });
+        var form = new StackPanel { Margin = new Thickness(20, 16, 20, 20) };
+        var tab = new SettingsTabItem { Header = title, Content = form };
+        categories.Items.Add(tab);
         return form;
     }
 
-    private void AddPreference(Panel form, string text, Control control, string? help = null)
+    private void AddPreference(Panel form, string id, string text, Control control, string? help = null, string keywords = "")
     {
         var row = new Grid { Margin = new Thickness(0, 0, 0, 8) };
         row.ColumnDefinitions.Add(new ColumnDefinition());
@@ -401,6 +416,13 @@ internal sealed class SettingsWindow : Window
         row.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         var captionText = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
         captionText.Children.Add(new TextBlock { Text = text, FontWeight = FontWeights.SemiBold, TextWrapping = TextWrapping.Wrap });
+        if (control == desktopStrip)
+        {
+            var status = new TextBlock { Text = UnavailableOverviewDesktops.Reason, FontSize = 12,
+                TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 4, 0, 0) };
+            status.SetResourceReference(TextBlock.ForegroundProperty, "SecondaryText");
+            captionText.Children.Add(status);
+        }
         if (control == dimming)
         {
             var summary = new TextBlock { FontSize = 12, TextWrapping = TextWrapping.Wrap,
@@ -501,12 +523,16 @@ internal sealed class SettingsWindow : Window
         Grid.SetRowSpan(surface, row.RowDefinitions.Count);
         Panel.SetZIndex(surface, -1);
         row.Children.Add(surface);
+        AutomationProperties.SetAutomationId(row, id);
+        RegisterSearchRow(form, row, text, $"{keywords} {(control as ContentControl)?.Content}");
         ReflowPreferences();
     }
 
     private void ReflowPreferences()
     {
-        double width = categories.ActualWidth > 0 ? categories.ActualWidth : Width - 40;
+        double viewportWidth = filterScroll.Visibility == Visibility.Visible ? filterScroll.ViewportWidth : PageScroll?.ViewportWidth ?? 0;
+        double width = (viewportWidth > 0 ? viewportWidth :
+            categories.ActualWidth > 0 ? categories.ActualWidth : Width) - 40;
         bool narrow = width < 520;
         exposeHint.Margin = new Thickness(narrow ? 12 : 252, 0, 12, 12);
         foreach (var row in preferenceRows)
@@ -521,6 +547,7 @@ internal sealed class SettingsWindow : Window
     private void ApplyControlStyles()
     {
         SettingsControlStyles.Apply(Resources, SystemParameters.HighContrast);
+        Resources["SettingsSurface"] = SystemParameters.HighContrast ? SystemColors.WindowBrush : SharedBrushes.Graphite;
         var button = new Style(typeof(Button));
         button.Setters.Add(new Setter(Control.PaddingProperty, new Thickness(12, 8, 12, 8)));
         button.Setters.Add(new Setter(Control.MinHeightProperty, 36.0));
@@ -557,12 +584,12 @@ internal sealed class SettingsWindow : Window
         button.Setters.Add(new Setter(Control.BorderBrushProperty, Brushes.Transparent));
         button.Setters.Add(new Setter(Control.TemplateProperty, template));
         Resources[typeof(Button)] = button;
-        var tab = new Style(typeof(TabItem));
+        var tab = new Style(typeof(SettingsTabItem));
         tab.Setters.Add(new Setter(Control.PaddingProperty, new Thickness(12, 10, 12, 10)));
         tab.Setters.Add(new Setter(FrameworkElement.MarginProperty, new Thickness(0, 0, 12, 0)));
         tab.Setters.Add(new Setter(Control.ForegroundProperty, Foreground));
         var tabBorder = new FrameworkElementFactory(typeof(Border), "TabFrame");
-        tabBorder.SetValue(Border.BackgroundProperty, Background);
+        tabBorder.SetResourceReference(Border.BackgroundProperty, "SettingsSurface");
         tabBorder.SetValue(Border.PaddingProperty, new TemplateBindingExtension(Control.PaddingProperty));
         tabBorder.SetValue(Border.CornerRadiusProperty, new CornerRadius(6, 6, 0, 0));
         tabBorder.SetValue(Border.BorderThicknessProperty, new Thickness(0, 0, 0, 2));
@@ -579,24 +606,69 @@ internal sealed class SettingsWindow : Window
         tabHover.Setters.Add(new Setter(Border.BackgroundProperty, SystemParameters.HighContrast ? SystemColors.HighlightBrush : Brush("#465B4C"), "TabFrame"));
         tabHover.Setters.Add(new Setter(Control.ForegroundProperty, SystemParameters.HighContrast ? SystemColors.HighlightTextBrush : Brushes.White));
         tabTemplate.Triggers.Add(tabHover);
-        var tabFocus = new Trigger { Property = UIElement.IsKeyboardFocusWithinProperty, Value = true };
-        tabFocus.Setters.Add(new Setter(Border.BackgroundProperty, SystemParameters.HighContrast ? SystemColors.HighlightBrush : Brush("#465B4C"), "TabFrame"));
-        tabFocus.Setters.Add(new Setter(Control.ForegroundProperty, SystemParameters.HighContrast ? SystemColors.HighlightTextBrush : Brushes.White));
-        tabTemplate.Triggers.Add(tabFocus);
+        // WPF shows this adorner for keyboard navigation without latching the hover color on click.
+        var tabFocus = new Style(typeof(Control));
+        var focusFrame = new FrameworkElementFactory(typeof(Border));
+        focusFrame.SetValue(UIElement.IsHitTestVisibleProperty, false);
+        focusFrame.SetValue(FrameworkElement.MarginProperty, new Thickness(2, 2, 2, 4));
+        focusFrame.SetValue(Border.BorderBrushProperty, Foreground);
+        focusFrame.SetValue(Border.BorderThicknessProperty, new Thickness(2));
+        if (SystemParameters.HighContrast)
+        {
+            var innerFocusFrame = new FrameworkElementFactory(typeof(Border));
+            innerFocusFrame.SetResourceReference(Border.BorderBrushProperty, "SettingsSurface");
+            innerFocusFrame.SetValue(Border.BorderThicknessProperty, new Thickness(1));
+            focusFrame.AppendChild(innerFocusFrame);
+        }
+        tabFocus.Setters.Add(new Setter(Control.TemplateProperty, new ControlTemplate(typeof(Control)) { VisualTree = focusFrame }));
+        tab.Setters.Add(new Setter(FrameworkElement.FocusVisualStyleProperty, tabFocus));
         tab.Setters.Add(new Setter(Control.TemplateProperty, tabTemplate));
-        Resources[typeof(TabItem)] = tab;
+        Resources[typeof(SettingsTabItem)] = tab;
+    }
+
+    private void InitializeCategoryTemplate()
+    {
         var categoryTemplate = new ControlTemplate(typeof(TabControl));
         var categoryRoot = new FrameworkElementFactory(typeof(DockPanel));
+        categoryRoot.SetValue(Panel.BackgroundProperty, new TemplateBindingExtension(Control.BackgroundProperty));
         var headers = new FrameworkElementFactory(typeof(WrapPanel));
         headers.SetValue(Panel.IsItemsHostProperty, true);
         headers.SetValue(DockPanel.DockProperty, Dock.Top);
+        headers.SetValue(FrameworkElement.MarginProperty, new Thickness(20, 0, 20, 0));
+        headers.SetValue(KeyboardNavigation.TabNavigationProperty, KeyboardNavigationMode.Once);
         categoryRoot.AppendChild(headers);
+        var scroll = new FrameworkElementFactory(typeof(ScrollViewer), nameof(PageScroll));
+        scroll.SetValue(ScrollViewer.VerticalScrollBarVisibilityProperty, ScrollBarVisibility.Auto);
+        scroll.SetValue(ScrollViewer.HorizontalScrollBarVisibilityProperty, ScrollBarVisibility.Disabled);
+        scroll.SetValue(UIElement.FocusableProperty, false);
+        scroll.SetValue(Control.BorderThicknessProperty, new Thickness(0));
+        scroll.SetValue(Control.VerticalContentAlignmentProperty, VerticalAlignment.Top);
+        scroll.AddHandler(ScrollViewer.ScrollChangedEvent, new ScrollChangedEventHandler((sender, e) =>
+        {
+            if (ReferenceEquals(sender, e.OriginalSource) && e.ViewportWidthChange != 0) ReflowPreferences();
+        }));
         var selectedContent = new FrameworkElementFactory(typeof(ContentPresenter), "PART_SelectedContentHost");
         selectedContent.SetValue(ContentPresenter.ContentSourceProperty, "SelectedContent");
         selectedContent.SetValue(FrameworkElement.VerticalAlignmentProperty, VerticalAlignment.Top);
-        categoryRoot.AppendChild(selectedContent);
+        scroll.AppendChild(selectedContent);
+        categoryRoot.AppendChild(scroll);
         categoryTemplate.VisualTree = categoryRoot;
         categories.Template = categoryTemplate;
+    }
+
+    private sealed class SettingsTabItem : TabItem
+    {
+        protected override void OnPreviewGotKeyboardFocus(KeyboardFocusChangedEventArgs e)
+        {
+            // WPF's TabItem redirects activation to the first focusable control in the new page.
+            if (e.NewFocus != this) base.OnPreviewGotKeyboardFocus(e);
+        }
+
+        protected override void OnGotKeyboardFocus(KeyboardFocusChangedEventArgs e)
+        {
+            base.OnGotKeyboardFocus(e);
+            if (e.NewFocus == this && !IsSelected) SetCurrentValue(IsSelectedProperty, true);
+        }
     }
 
     private static SolidColorBrush Brush(string color) => new((Color)ColorConverter.ConvertFromString(color));
@@ -811,6 +883,7 @@ internal sealed class SettingsWindow : Window
         Check(hotCorners, (p, value) => p.EnableHotCorners = value);
         Check(minimized, (p, value) => p.ShowMinimizedWindows = value);
         Check(overviewMinimized, (p, value) => p.ShowMinimizedWindowsInOverview = value);
+        Check(desktopStrip, (p, value) => p.EnableVirtualDesktopStrip = value);
         Check(reduceAnimations, (p, value) => p.ReduceAnimations = value);
         Check(startup, (p, value) => p.RunOnStartup = value);
         Choose(position, (p, value) => p.HotCornerPosition = value);
@@ -852,7 +925,7 @@ internal sealed class SettingsWindow : Window
         }
         else
         {
-            categories.SelectedIndex = 2;
+            if (filterScroll.Visibility != Visibility.Visible) categories.SelectedIndex = 2;
             delay.Tag = "Invalid";
             ReportShortcutWarning("Enter a delay of zero or more milliseconds.");
         }
@@ -890,6 +963,7 @@ internal sealed class SettingsWindow : Window
     private void RestorePreferences()
     {
         var preferences = source;
+        updatePanel.Children.OfType<UpdatePanel>().FirstOrDefault()?.RefreshAutomaticPreference();
         hotkey = preferences.Hotkey;
         appExposeHotkey = preferences.AppExposeHotkey;
         StopRecording();
@@ -904,6 +978,7 @@ internal sealed class SettingsWindow : Window
         dimming.Value = preferences.BackgroundDimming;
         minimized.IsChecked = preferences.ShowMinimizedWindows;
         overviewMinimized.IsChecked = preferences.ShowMinimizedWindowsInOverview;
+        desktopStrip.IsChecked = preferences.EnableVirtualDesktopStrip;
         reduceAnimations.IsChecked = preferences.ReduceAnimations;
         startup.IsChecked = preferences.RunOnStartup;
     }
