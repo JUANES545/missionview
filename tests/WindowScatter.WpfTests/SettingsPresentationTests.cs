@@ -630,7 +630,7 @@ public sealed class SettingsPresentationTests
                 Assert.Contains(Logical(window).OfType<TextBlock>(), t => t.Text.StartsWith("Enter a delay"));
                 Capture(root, $"settings-{(int)width}-{(int)height}-font{font}-error.png");
                 Assert.DoesNotContain(Logical(window).OfType<Button>(), b => b.Content is "Save" or "Cancel");
-                Assert.True(System.Windows.Input.KeyboardNavigation.GetTabIndex(tabs)
+                Assert.True(System.Windows.Input.KeyboardNavigation.GetTabIndex(Assert.IsType<Grid>(tabs.Parent))
                     < System.Windows.Input.KeyboardNavigation.GetTabIndex(Logical(window).OfType<StackPanel>()
                         .Single(p => p.Children.OfType<ScrollViewer>().Any(s => s.Content is TextBlock t &&
                             AutomationProperties.GetLiveSetting(t) == AutomationLiveSetting.Assertive))));

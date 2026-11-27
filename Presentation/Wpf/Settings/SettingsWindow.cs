@@ -75,7 +75,7 @@ internal sealed partial class SettingsWindow : Window
         Height = Math.Min(480, SystemParameters.WorkArea.Height);
         MaxHeight = SystemParameters.WorkArea.Height;
         MinWidth = Math.Min(376, SystemParameters.WorkArea.Width);
-        MinHeight = Math.Min(300, MaxHeight);
+        MinHeight = Math.Min(384, MaxHeight);
         WindowStartupLocation = WindowStartupLocation.CenterScreen;
         // Leave the native caption lane transparent so DWM can paint its buttons.
         Background = Brushes.Transparent;
