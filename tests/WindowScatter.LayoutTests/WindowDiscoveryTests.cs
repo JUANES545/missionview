@@ -5,6 +5,35 @@ using static WindowScatter.Win32Interop;
 public class WindowDiscoveryTests
 {
     [Theory]
+    [InlineData("z-order", true)]
+    [InlineData("addition", false)]
+    [InlineData("removal", false)]
+    [InlineData("reused-hwnd", false)]
+    [InlineData("minimized", false)]
+    [InlineData("title", false)]
+    [InlineData("geometry", false)]
+    public void OverviewSnapshotIgnoresZOrderButDetectsSourceChanges(string change, bool same)
+    {
+        static WindowInfo Source(int handle) => new()
+        {
+            Handle = new(handle), Identity = new(new(handle), 1, 2), Title = "Document",
+            OriginalRect = new() { Right = 640, Bottom = 480 }
+        };
+        var old = new[] { Source(10), Source(20) };
+        var current = new List<WindowInfo> { Source(20), Source(10) };
+        switch (change)
+        {
+            case "addition": current.Add(Source(30)); break;
+            case "removal": current.RemoveAt(0); break;
+            case "reused-hwnd": current[0].Identity = new(current[0].Handle, 9, 2); break;
+            case "minimized": current[0].WasMinimized = true; break;
+            case "title": current[0].Title = "Another document"; break;
+            case "geometry": current[0].OriginalRect.Right++; break;
+        }
+        Assert.Equal(same, WindowInfo.SameOverviewSources(old, current));
+    }
+
+    [Theory]
     [InlineData(500, 1430, 1300, 2030)]
     [InlineData(-900, 300, 20, 900)]
     public void VisibleSliverBelongsToMonitorEvenWithCenterOutside(int left, int top, int right, int bottom)

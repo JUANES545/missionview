@@ -48,21 +48,22 @@ internal sealed class WindowClose
 
     internal WindowActivationTarget? ResolveReturnTarget()
     {
-        var attention = FindAttentionTarget();
+        var attention = FindAttentionTarget(includeRequestedForeground: true);
         if (attention.HasValue) return attention;
         return latestRequest is { } target && requested.Contains(target) && identify(target.Handle) == target &&
             readSurface(target.Handle) is { Visible: true } surface && surface.Identity == target
             ? target : null;
     }
 
-    internal WindowActivationTarget? FindAttentionTarget()
+    internal WindowActivationTarget? FindAttentionTarget(bool includeRequestedForeground = false)
     {
         if (latestRequest is not { } target || !requested.Contains(target) || identify(target.Handle) != target) return null;
         var source = readSurface(target.Handle);
         if (source.Identity != target) return null;
         IntPtr active = foreground();
         if (active == target.Handle)
-            return source.Visible && readSurface(target.Handle) == source && foreground() == active ? target : null;
+            return includeRequestedForeground && source.Visible && readSurface(target.Handle) == source && foreground() == active
+                ? target : null;
         if (active != IntPtr.Zero && IsOwnedAttention(active, source) is { } focused && foreground() == active)
             return focused;
         if (source.Enabled) return null;

@@ -28,7 +28,8 @@ namespace WindowScatter
 
         public Dictionary<IntPtr, List<WindowInfo>> EnumerateByMonitor(IReadOnlyList<MonitorHelper.MonitorBounds> monitors,
             AppExposeRequest? request = null, bool showMinimizedWindows = true,
-            IReadOnlyList<MonitorHelper.MonitorBounds>? visibleMonitors = null, bool showMinimizedInOverview = false)
+            IReadOnlyList<MonitorHelper.MonitorBounds>? visibleMonitors = null, bool showMinimizedInOverview = false,
+            IReadOnlyDictionary<WindowActivationTarget, string?>? knownApplicationNames = null)
         {
             visibleMonitors ??= monitors;
             bool includeMinimized = request == null ? showMinimizedInOverview : showMinimizedWindows;
@@ -128,6 +129,11 @@ namespace WindowScatter
                 uint process = window.Identity.ProcessId;
                 if (GetWindowThreadProcessId(window.Handle, out uint liveProcess) != window.Identity.ThreadId ||
                     liveProcess != process) continue;
+                if (knownApplicationNames != null && knownApplicationNames.TryGetValue(window.Identity, out var knownName))
+                {
+                    window.ApplicationName = knownName;
+                    continue;
+                }
                 if (!applicationNames.TryGetValue(process, out string? name))
                     applicationNames[process] = name = ApplicationIdentityReader.ReadApplicationName(process);
                 window.ApplicationName = name;

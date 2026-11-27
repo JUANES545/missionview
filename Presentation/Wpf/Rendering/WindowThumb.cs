@@ -9,8 +9,19 @@ public sealed class WindowThumb : WindowPreviewState
     private bool outlineSelected, outlineTransitioning, closeOutlineSuppressed;
     private string? foldedTitle;
     private string? foldedApplication;
-    public string Title { get; init; } = "";
-    internal string? ApplicationName { get; init; }
+    private string title = "";
+    private string? applicationName;
+    internal long LiveEntryStartedAt;
+    public string Title { get => title; init => title = value; }
+    internal string? ApplicationName { get => applicationName; init => applicationName = value; }
+
+    internal void UpdateSourceLabels(WindowInfo source)
+    {
+        title = source.Title;
+        applicationName = source.ApplicationName;
+        foldedTitle = foldedApplication = null;
+    }
+
     internal bool MatchesTitle(string foldedQuery) => !sourceClosed && (foldedQuery.Length == 0 ||
         OverviewTitleSearch.Matches(foldedTitle ??= OverviewTitleSearch.Fold(Title), foldedQuery) ||
         (ApplicationName != null &&

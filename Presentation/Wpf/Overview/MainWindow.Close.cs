@@ -8,9 +8,9 @@ namespace WindowScatter;
 public partial class MainWindow
 {
     private readonly WindowClose windowClose = new();
-    private DispatcherTimer? closeObservationTimer;
-    private bool closedWindowRefreshRequired;
-    private bool closedWindowRefreshQueued;
+    private DispatcherTimer? windowObservationTimer;
+    private bool confirmedCloseAwaitingRefresh;
+    private bool windowRefreshQueued;
     private int closeTraceEntries;
     private string PendingCloseStatus => IsSearching
         ? "Close requested. Clear the search, then press Escape to check the last requested window."
@@ -51,8 +51,7 @@ public partial class MainWindow
             }
             if (thumb.CloseButton != null) thumb.CloseButton.IsEnabled = false;
             coordinator.SetCloseStatus(PendingCloseStatus);
-            coordinator.closeObservationTimer ??= CreateCloseObservationTimer();
-            coordinator.closeObservationTimer.Start();
+            coordinator.StartWindowObservation();
         }
         catch (Exception error)
         {
@@ -61,82 +60,107 @@ public partial class MainWindow
         }
     }
 
-    private DispatcherTimer CreateCloseObservationTimer()
+    private void StartWindowObservation()
     {
-        var timer = new DispatcherTimer(DispatcherPriority.Background, coordinator.Dispatcher)
-        { Interval = TimeSpan.FromMilliseconds(250) };
-        timer.Tick += (_, _) => coordinator.ObserveWindowClosures();
-        return timer;
+        if (windowObservationTimer == null)
+        {
+            windowObservationTimer = new DispatcherTimer(DispatcherPriority.Background, Dispatcher);
+            windowObservationTimer.Tick += (_, _) => ObserveOverviewWindows();
+        }
+        windowObservationTimer.Interval = TimeSpan.FromMilliseconds(windowClose.HasPending ? 250 : 500);
+        windowObservationTimer.Start();
     }
 
-    private void ObserveWindowClosures()
+    private bool CanReconcileOverviewWindows => scatterInteraction.IsOpen && !isClosing &&
+        !isScatterActive && !isTransitioning && !AnyAnimating && !movingWindow && !drag.IsPressed &&
+        !navigationPending && fileDrag == null && !services.Desktops.Pending &&
+        !views.Any(v => v.animationManager.IsPreviewAnimating || v.openMoveMenus.Count != 0);
+
+    private void ObserveOverviewWindows()
     {
-        if (!scatterInteraction.IsOpen || isClosing) { StopCloseObservation(); return; }
-        if (AnyAnimating || views.Any(v => v.animationManager.IsPreviewAnimating) ||
-            isScatterActive || isTransitioning || movingWindow || drag.IsPressed || navigationPending) return;
+        if (!scatterInteraction.IsOpen || isClosing) { StopWindowObservation(); return; }
+        if (windowRefreshQueued || !CanReconcileOverviewWindows) return;
         try
         {
-            var closed = windowClose.ConfirmClosed();
-            if (closed.Count != 0)
+            bool confirmed = windowClose.ConfirmClosed().Count != 0;
+            if (confirmed)
             {
                 TraceClosePhase("identity-closed");
+                confirmedCloseAwaitingRefresh = true;
+            }
+            var dead = AllThumbs().Select(t => t.Identity).Where(windowClose.IsClosed).ToHashSet();
+            if (dead.Count != 0)
+            {
                 foreach (var view in views)
                 {
-                    // Retire the live DWM relation too, before the deferred layout rebuild.
-                    view.animationManager.StopKeepAlive();
-                    view.thumbnailManager.HideClosedSources(closed, windowClose.IsClosed);
+                    if (view.windowThumbs.Any(t => dead.Contains(t.Identity)))
+                    {
+                        view.animationManager.StopKeepAlive();
+                        view.thumbnailManager.HideClosedSources(dead, windowClose.IsClosed);
+                    }
                     foreach (var thumb in view.minimizedStrip?.Thumbs ?? [])
-                        if (closed.Contains(thumb.Identity)) thumb.HideIfSourceClosed(windowClose.IsClosed);
+                        if (dead.Contains(thumb.Identity)) thumb.HideIfSourceClosed(windowClose.IsClosed);
                 }
-                closedWindowRefreshRequired = true;
             }
             if (TryExposeCloseAttention()) return;
-            if (!closedWindowRefreshRequired || closedWindowRefreshQueued) return;
+            if (!confirmed && dead.Count == 0)
+            {
+                RefreshOverviewWindows();
+                return;
+            }
             int generation = scatterInteraction.Generation;
-            closedWindowRefreshQueued = true;
-            // Submit the dead source's hidden chrome before synchronous enumeration/DWM rebuild.
+            windowRefreshQueued = true;
+            // Let WPF submit the hidden contour before enumerating or moving any survivors.
             Dispatcher.BeginInvoke(new Action(() =>
             {
                 if (generation != scatterInteraction.Generation) return;
-                closedWindowRefreshQueued = false;
-                if (!scatterInteraction.IsOpen || isClosing || isScatterActive || isTransitioning || AnyAnimating ||
-                    views.Any(v => v.animationManager.IsPreviewAnimating) || movingWindow || drag.IsPressed || navigationPending) return;
-                RefreshAfterConfirmedClose();
+                windowRefreshQueued = false;
+                if (CanReconcileOverviewWindows) RefreshOverviewWindows();
             }), DispatcherPriority.Loaded);
         }
         catch (Exception error) { AbortOverview(error); }
     }
 
-    private void RefreshAfterConfirmedClose()
+    private void RefreshOverviewWindows()
     {
         try
         {
-            if (!EnsureTopology()) return;
-            var selection = AllThumbs().FirstOrDefault(t => t.WindowHandle == selectedWindowHandle)?.Identity;
-            previewKey.Release();
-            foreach (var view in views) view.ResetPreview();
-            var sourceOrder = WindowStacking.Capture();
-            var windows = EnumerateOverviewWindows();
-            for (int i = 0; i < views.Count; i++)
+            var previousDiagnostics = (appExposeRequest?.UnidentifiedWindows, appExposeRequest?.WindowsOverLimit);
+            var names = views.SelectMany(v => v.overviewSources).ToDictionary(w => w.Identity, w => w.ApplicationName);
+            var windows = EnumerateOverviewWindows(names);
+            var changedViews = views.Where(v => !WindowInfo.SameOverviewSources(v.overviewSources,
+                windows[v.monitor.Handle])).ToArray();
+            if (changedViews.Length != 0)
             {
-                var view = views[i];
-                if (view.TryKeepThumbnailsAfterClose(sourceOrder, windows[view.monitor.Handle]))
+                if (!EnsureTopology()) return;
+                var selection = AllThumbs().FirstOrDefault(t => t.WindowHandle == selectedWindowHandle)?.Identity;
+                var sourceOrder = WindowStacking.Capture();
+                foreach (var view in changedViews)
                 {
-                    TraceClosePhase("view-retained", i);
-                    continue;
+                    if (view.previewExpanded) view.ResetPreview();
+                    if (confirmedCloseAwaitingRefresh) TraceClosePhase("view-rebuild-begin", views.IndexOf(view));
+                    view.RebuildThumbnails(sourceOrder, windows[view.monitor.Handle], settled: true, retainExisting: true);
+                    if (confirmedCloseAwaitingRefresh) TraceClosePhase("view-rebuild-end", views.IndexOf(view));
                 }
-                TraceClosePhase("view-rebuild-begin", i);
-                view.RebuildThumbnails(sourceOrder, windows[view.monitor.Handle], settled: true);
-                TraceClosePhase("view-rebuild-end", i);
+                var retained = selection is { } target && AllThumbs().Any(t => t.Identity == target)
+                    ? target.Handle : IntPtr.Zero;
+                if (retained == IntPtr.Zero) SelectWindow(IntPtr.Zero);
+                else activeView = ViewFor(retained);
+                if (IsSearching) RefreshSearchResults(retained, keyboardSelection: false);
+                else SelectWindow(retained != IntPtr.Zero ? retained : AllThumbs().FirstOrDefault()?.WindowHandle ?? IntPtr.Zero);
+                RestorePendingCloseStatus();
             }
-            session.Select(IntPtr.Zero);
-            var retained = selection is { } target && AllThumbs().Any(t => t.Identity == target)
-                ? target.Handle : IntPtr.Zero;
-            if (IsSearching) RefreshSearchResults(retained);
-            else SelectWindow(retained != IntPtr.Zero ? retained : AllThumbs().FirstOrDefault()?.WindowHandle ?? IntPtr.Zero);
-            closedWindowRefreshRequired = false;
-            SetCloseStatus(windowClose.HasPending ? PendingCloseStatus : "Window closed");
-            if (!windowClose.HasPending) closeObservationTimer?.Stop();
+            if (previousDiagnostics != (appExposeRequest?.UnidentifiedWindows, appExposeRequest?.WindowsOverLimit) &&
+                !windowClose.HasPending)
+            {
+                foreach (var view in views) view.MoveStatus.Text = view.IdleMoveStatus;
+            }
+            if (confirmedCloseAwaitingRefresh)
+            {
+                confirmedCloseAwaitingRefresh = false;
+                SetCloseStatus(windowClose.HasPending ? PendingCloseStatus : "Window closed");
+                StartWindowObservation();
+            }
         }
         catch (Exception error) { AbortOverview(error); }
     }
@@ -160,12 +184,12 @@ public partial class MainWindow
         }
     }
 
-    private void StopCloseObservation()
+    private void StopWindowObservation()
     {
-        coordinator.closeObservationTimer?.Stop();
+        coordinator.windowObservationTimer?.Stop();
         coordinator.windowClose.EndSession();
-        coordinator.closedWindowRefreshRequired = false;
-        coordinator.closedWindowRefreshQueued = false;
+        coordinator.confirmedCloseAwaitingRefresh = false;
+        coordinator.windowRefreshQueued = false;
     }
 
     private void RestorePendingCloseStatus()

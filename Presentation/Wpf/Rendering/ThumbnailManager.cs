@@ -2,6 +2,8 @@
 using System.Collections.Generic;
 using System.Linq;
 using System.Windows;
+using System.Windows.Automation;
+using System.Windows.Automation.Peers;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
@@ -46,13 +48,30 @@ namespace WindowScatter
         /// Layout coordinates are physical pixels (DWM space); WPF click targets
         /// live in DIPs, so geometry is divided by this scale (#10).</param>
         public void RegisterThumbnails(List<WindowLayout> layouts, WindowAnimationManager animationManager,
-            double dpiScale = 1.0, bool settled = false, string foldedQuery = "")
+            double dpiScale = 1.0, bool settled = false, string foldedQuery = "", bool retainExisting = false)
         {
             if (dpiScale <= 0) dpiScale = 1.0;
+            var retained = new Dictionary<WindowActivationTarget, WindowThumb>();
+            if (retainExisting)
+            {
+                var identities = layouts.Select(l => l.Window.Identity).ToHashSet();
+                foreach (var thumb in windowThumbs.ToArray())
+                {
+                    if (thumb.ThumbnailHandle != IntPtr.Zero && identities.Contains(thumb.Identity))
+                        retained.Add(thumb.Identity, thumb);
+                    else
+                        RemoveThumbnail(thumb, DwmUnregisterThumbnail);
+                }
+            }
 
             foreach (var layout in WindowStacking.BackToFront(layouts, l => l.Window.Handle, SourceOrder))
             {
                 var win = layout.Window;
+                if (retained.TryGetValue(win.Identity, out var existing))
+                {
+                    if (UpdateRetainedThumbnail(existing, layout, animationManager)) continue;
+                    RemoveThumbnail(existing, DwmUnregisterThumbnail);
+                }
                 bool wasMinimized = IsIconic(win.Handle);
                 if (wasMinimized) continue;
 
@@ -156,6 +175,8 @@ namespace WindowScatter
                 };
                 if (!thumb.MatchesTitle(foldedQuery))
                     clickBorder.Visibility = highlightBorder.Visibility = titleLabel.Visibility = Visibility.Hidden;
+                if (settled && retainExisting && existing == null && clickBorder.Visibility == Visibility.Visible)
+                    animationManager.BeginLiveEntry(thumb);
                 thumb.SetOutlineTransition(true);
 
                 if (!animationManager.UpdateThumbnailPosition(thumb, initializeVisibility: true))
@@ -177,7 +198,49 @@ namespace WindowScatter
             }
             var logicalOrder = layouts.Select((l, i) => (l.Window.Handle, i)).ToDictionary(x => x.Handle, x => x.i);
             windowThumbs.Sort((a, b) => logicalOrder[a.WindowHandle].CompareTo(logicalOrder[b.WindowHandle]));
+            if (retainExisting)
+            {
+                ApplyTitleFilter(foldedQuery);
+                UIElementAutomationPeer.FromElement(scatterCanvas)?.ResetChildrenCache();
+            }
             ApplyPalette(SystemParameters.HighContrast, SystemParameters.ClientAreaAnimation);
+        }
+
+        private static bool UpdateRetainedThumbnail(WindowThumb thumb, WindowLayout layout, WindowAnimationManager animationManager)
+        {
+            var source = layout.Window;
+            var rect = source.OriginalRect;
+            thumb.StartX = rect.Left;
+            thumb.StartY = rect.Top;
+            thumb.StartWidth = rect.Right - rect.Left;
+            thumb.StartHeight = rect.Bottom - rect.Top;
+            thumb.WasMaximized = source.WasMaximized;
+            if (thumb.Title != source.Title || thumb.ApplicationName != source.ApplicationName)
+            {
+                thumb.UpdateSourceLabels(source);
+                thumb.TitleLabel.Text = TrimTitle(source.Title);
+                AutomationProperties.SetName(thumb.ClickBorder, source.Title);
+                if (thumb.CloseButton is { } close)
+                {
+                    string label = $"Close {source.Title}";
+                    close.ToolTip = label;
+                    AutomationProperties.SetName(close, label);
+                }
+            }
+            thumb.TargetX = layout.X;
+            thumb.TargetY = layout.Y;
+            thumb.TargetWidth = layout.Width;
+            thumb.TargetHeight = layout.Height;
+            if (thumb.CurrentX == layout.X && thumb.CurrentY == layout.Y &&
+                thumb.CurrentWidth == layout.Width && thumb.CurrentHeight == layout.Height) return true;
+            thumb.SetOutlineTransition(true);
+            thumb.CurrentX = layout.X;
+            thumb.CurrentY = layout.Y;
+            thumb.CurrentWidth = layout.Width;
+            thumb.CurrentHeight = layout.Height;
+            if (animationManager.UpdateThumbnailPosition(thumb)) return true;
+            System.Diagnostics.Trace.TraceWarning("DWM rejected a retained overview thumbnail's new bounds.");
+            return false;
         }
 
         internal void ApplyPalette(bool highContrast, bool effects)
@@ -311,43 +374,32 @@ namespace WindowScatter
             }
         }
 
-        internal bool TryKeepLayoutAfterClose(IReadOnlyList<WindowInfo> windows, IReadOnlyList<IntPtr> sourceOrder)
-        {
-            if (windows.Count != windowThumbs.Count) return false;
-            foreach (var thumb in windowThumbs)
-            {
-                var source = windows.FirstOrDefault(w => w.Identity == thumb.Identity);
-                if (source == null || source.Handle != thumb.WindowHandle || source.WasMinimized ||
-                    source.Title != thumb.Title || source.ApplicationName != thumb.ApplicationName ||
-                    source.WasMaximized != thumb.WasMaximized || thumb.ThumbnailHandle == IntPtr.Zero ||
-                    source.OriginalRect.Left != thumb.StartX || source.OriginalRect.Top != thumb.StartY ||
-                    source.OriginalRect.Right - source.OriginalRect.Left != thumb.StartWidth ||
-                    source.OriginalRect.Bottom - source.OriginalRect.Top != thumb.StartHeight ||
-                    thumb.CurrentX != thumb.TargetX || thumb.CurrentY != thumb.TargetY ||
-                    thumb.CurrentWidth != thumb.TargetWidth || thumb.CurrentHeight != thumb.TargetHeight) return false;
-            }
-            SourceOrder = sourceOrder;
-            return true;
-        }
-
-        internal void HideClosedSources(IReadOnlyList<WindowActivationTarget> closed,
+        internal void HideClosedSources(IReadOnlyCollection<WindowActivationTarget> closed,
             Func<WindowActivationTarget, bool> isClosed, Func<IntPtr, int>? unregister = null)
         {
             unregister ??= DwmUnregisterThumbnail;
             foreach (var thumb in windowThumbs.ToArray())
             {
                 if (!closed.Contains(thumb.Identity) || !thumb.HideIfSourceClosed(isClosed)) continue;
-                if (thumb.ThumbnailHandle != IntPtr.Zero)
-                {
-                    int result = unregister(thumb.ThumbnailHandle);
-                    if (result == unchecked((int)0x80070057))
-                        System.Diagnostics.Trace.TraceWarning("DWM had already removed a confirmed-closed source's thumbnail.");
-                    else if (result < 0)
-                        throw new InvalidOperationException($"DWM could not remove the closed window's thumbnail: 0x{result:X8}.");
-                    thumb.ThumbnailHandle = IntPtr.Zero;
-                }
-                windowThumbs.Remove(thumb);
+                RemoveThumbnail(thumb, unregister);
             }
+        }
+
+        private void RemoveThumbnail(WindowThumb thumb, Func<IntPtr, int> unregister)
+        {
+            if (thumb.ThumbnailHandle != IntPtr.Zero)
+            {
+                int result = unregister(thumb.ThumbnailHandle);
+                if (result == unchecked((int)0x80070057))
+                    System.Diagnostics.Trace.TraceWarning("DWM had already removed an overview thumbnail.");
+                else if (result < 0)
+                    throw new InvalidOperationException($"DWM could not remove an overview thumbnail: 0x{result:X8}.");
+                thumb.ThumbnailHandle = IntPtr.Zero;
+            }
+            scatterCanvas.Children.Remove(thumb.ClickBorder);
+            scatterCanvas.Children.Remove(thumb.HighlightBorder);
+            scatterCanvas.Children.Remove(thumb.TitleLabel);
+            windowThumbs.Remove(thumb);
         }
 
         public void CleanupAllThumbnails()

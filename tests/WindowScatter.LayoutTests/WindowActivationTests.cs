@@ -5,6 +5,40 @@ using static WindowScatter.Win32Interop;
 public class WindowActivationTests
 {
     [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ClosingSourceForegroundWithoutAnOwnedPromptDoesNotExposeTheNativeClosingWindow(bool minimized)
+    {
+        var original = new WindowActivationTarget(new(20), 3, 4);
+        var identity = original;
+        var close = new WindowClose(_ => identity, _ => (true, 0),
+            _ => new(identity, IntPtr.Zero, true, true), foreground: () => original.Handle);
+        close.Request(original);
+        var interaction = new ScatterInteraction();
+        interaction.BeginSession(new(new(99), 1, 2));
+        int hidden = 0;
+        var activation = new WindowActivation(_ => (identity.ThreadId, identity.ProcessId),
+            (_, _) => throw new Exception("Automatic source attention must not restore."),
+            _ => throw new Exception("Automatic source attention must not activate."),
+            () => original.Handle, _ => minimized);
+        var attention = close.FindAttentionTarget();
+        if (attention is { } target)
+        {
+            interaction.TryBeginClose(target, out _);
+            activation.CloseOverviewForPendingClose(target, original, false,
+                new HashSet<IntPtr> { new(99) }, () => hidden++, () => close.IsReturnTargetValid(target, original));
+        }
+        Assert.Equal(0, hidden);
+        Assert.True(interaction.IsOpen);
+        Assert.True(close.IsPending(original));
+        Assert.Equal(original, close.ResolveReturnTarget());
+        identity = default;
+        Assert.Equal(original, Assert.Single(close.ConfirmClosed()));
+        Assert.Null(close.FindAttentionTarget());
+        Assert.True(interaction.IsOpen);
+    }
+
+    [Theory]
     [InlineData(false, false, true, false)]
     [InlineData(false, true, true, true)]
     [InlineData(true, false, true, true)]
@@ -39,7 +73,8 @@ public class WindowActivationTests
         var close = new WindowClose(_ => original, _ => (true, 0),
             _ => new(original, IntPtr.Zero, true, true), foreground: () => active);
         close.Request(original);
-        Assert.Equal(original, close.FindAttentionTarget());
+        Assert.Null(close.FindAttentionTarget());
+        Assert.Equal(original, close.ResolveReturnTarget());
         if (!stillActive) active = new(99);
         bool minimized = false;
         var activation = new WindowActivation(_ => (original.ThreadId, original.ProcessId),
@@ -88,11 +123,11 @@ public class WindowActivationTests
     }
 
     [Theory]
-    [InlineData(20, true)]
+    [InlineData(20, false)]
     [InlineData(30, true)]
     [InlineData(40, false)]
     [InlineData(10, false)]
-    public void PendingAttentionRequiresRequestedWindowOrExactOwnedForeground(int activeHandle, bool attention)
+    public void AutomaticAttentionRequiresExactOwnedForegroundWhileEscapeCanReturnToRequestedWindow(int activeHandle, bool attention)
     {
         var target = new WindowActivationTarget(new(20), 3, 4);
         var popup = new WindowActivationTarget(new(30), 5, 4);

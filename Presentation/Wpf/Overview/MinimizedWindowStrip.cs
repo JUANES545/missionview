@@ -222,7 +222,7 @@ namespace WindowScatter
             foreach (var thumb in Thumbs) thumb.SetOutlineTransition(!visible);
         }
 
-        internal bool CanKeepWindowsAfterClose(IReadOnlyList<WindowInfo> windows) =>
+        internal bool CanKeepWindows(IReadOnlyList<WindowInfo> windows) =>
             windows.Count == Thumbs.Count && Thumbs.All(thumb => windows.Any(window =>
                 window.WasMinimized && window.Identity == thumb.Identity && window.Handle == thumb.WindowHandle &&
                 window.Title == thumb.Title && window.ApplicationName == thumb.ApplicationName &&

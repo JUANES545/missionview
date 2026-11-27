@@ -91,13 +91,17 @@ namespace WindowScatter
                 .ThenBy(w => w.Handle.ToInt64()).ToList();
             double searchScale = Math.Min(maximumScale,
                 windows.Min(w => Math.Min(availableW / Width(w), availableH / Height(w))));
-            var retained = windows.Where(w => w.Identity.Handle == w.Handle && w.Identity.ThreadId != 0 &&
-                w.Identity.ProcessId != 0 && previous.TryGetValue(w.Identity, out var old) &&
-                old.Source.Equals(w.OriginalRect)).ToDictionary(w => w.Identity, w => previous[w.Identity]);
-            if (retained.Count > 0 && previousScale > 0 && previousScale <= searchScale)
+            // A lone maximized window returns to its cold layout, not its former slot among other windows.
+            if ((windows.Count != 1 || !windows[0].WasMaximized) && previousScale > 0 && previousScale <= searchScale)
             {
-                var stable = TryPlace(searchOrder, previousScale, left, top, availableW, availableH, side, bottom, retained);
-                if (stable != null) return Remember(stable, context, previousScale);
+                var retained = windows.Where(w => w.Identity.Handle == w.Handle && w.Identity.ThreadId != 0 &&
+                    w.Identity.ProcessId != 0 && previous.TryGetValue(w.Identity, out var old) &&
+                    old.Source.Equals(w.OriginalRect)).ToDictionary(w => w.Identity, w => previous[w.Identity]);
+                if (retained.Count != 0)
+                {
+                    var stable = TryPlace(searchOrder, previousScale, left, top, availableW, availableH, side, bottom, retained);
+                    if (stable != null) return Remember(stable, context, previousScale);
+                }
             }
             while (true)
             {
