@@ -112,7 +112,7 @@ namespace WindowScatter
                     Title = window.Title,
                     ApplicationName = window.ApplicationName,
                     WindowHandle = window.Handle, Identity = window.Identity, WasMinimized = true,
-                    WasMaximized = window.WasMaximized, ClickBorder = tile, HighlightBorder = tile, TitleLabel = title,
+                    WasMaximized = window.WasMaximized, ClickBorder = tile, HighlightBorder = tile, TitleLabel = title, MinimizedButton = button,
                     TargetWidth = tile.Width * scale, TargetHeight = tile.Height * scale
                 };
                 tile.MouseEnter += (_, _) => hovered(window.Handle);
@@ -186,6 +186,7 @@ namespace WindowScatter
                 var visibility = matches ? Visibility.Visible : Visibility.Hidden;
                 if (thumb.ClickBorder.Visibility == visibility) continue;
                 thumb.ClickBorder.Visibility = visibility;
+                thumb.RefreshSelectionOutline();
                 buttons[i].IsEnabled = matches;
                 buttons[i].RefreshKeyboardToolTip();
                 changed = true;
@@ -199,6 +200,7 @@ namespace WindowScatter
             {
                 var thumb = Thumbs[i];
                 bool selected = thumb.WindowHandle == handle;
+                thumb.SetSelectionOutline(selected);
                 if (thumb.CloseButton != null) thumb.CloseButton.Selected = selected;
                 buttons[i].IsSelected = selected;
                 buttons[i].KeyboardSelected = selected && keyboardFocus;
@@ -214,6 +216,17 @@ namespace WindowScatter
             scroll.UpdateLayout();
             UpdateGeometry();
         }
+
+        internal void SetSelectionOutlinesVisible(bool visible)
+        {
+            foreach (var thumb in Thumbs) thumb.SetOutlineTransition(!visible);
+        }
+
+        internal bool CanKeepWindowsAfterClose(IReadOnlyList<WindowInfo> windows) =>
+            windows.Count == Thumbs.Count && Thumbs.All(thumb => windows.Any(window =>
+                window.WasMinimized && window.Identity == thumb.Identity && window.Handle == thumb.WindowHandle &&
+                window.Title == thumb.Title && window.ApplicationName == thumb.ApplicationName &&
+                window.WasMaximized == thumb.WasMaximized));
 
         private void SystemPropertyChanged(object? sender, PropertyChangedEventArgs e)
         {
@@ -289,10 +302,16 @@ namespace WindowScatter
                 <Trigger Property="IsPressed" Value="True"><Setter TargetName="Surface" Property="Background" Value="{DynamicResource Hover}"/></Trigger>
                 <Trigger Property="IsSelected" Value="True">
                   <Setter TargetName="Surface" Property="Background" Value="{DynamicResource Selected}"/>
-                  <Setter TargetName="Frame" Property="BorderBrush" Value="{DynamicResource Outline}"/>
                   <Setter Property="Foreground" Value="{DynamicResource SelectedText}"/>
                   <Setter TargetName="Check" Property="Visibility" Value="Visible"/>
                 </Trigger>
+                <MultiTrigger>
+                  <MultiTrigger.Conditions>
+                    <Condition Property="IsSelected" Value="True"/>
+                    <Condition Property="SelectionOutlineVisible" Value="True"/>
+                  </MultiTrigger.Conditions>
+                  <Setter TargetName="Frame" Property="BorderBrush" Value="{DynamicResource Outline}"/>
+                </MultiTrigger>
                 <Trigger Property="KeyboardSelected" Value="True"><Setter TargetName="Focus" Property="Visibility" Value="Visible"/></Trigger>
                 <Trigger Property="IsKeyboardFocused" Value="True"><Setter TargetName="Focus" Property="Visibility" Value="Visible"/></Trigger>
               </ControlTemplate.Triggers>
@@ -343,8 +362,11 @@ namespace WindowScatter
         public static readonly DependencyProperty KeyboardSelectedProperty = DependencyProperty.Register(nameof(KeyboardSelected),
             typeof(bool), typeof(MinimizedWindowButton),
             new FrameworkPropertyMetadata(false, (sender, _) => ((MinimizedWindowButton)sender).RefreshKeyboardToolTip()));
+        public static readonly DependencyProperty SelectionOutlineVisibleProperty = DependencyProperty.Register(nameof(SelectionOutlineVisible),
+            typeof(bool), typeof(MinimizedWindowButton), new FrameworkPropertyMetadata(true));
         public bool IsSelected { get => (bool)GetValue(IsSelectedProperty); internal set => SetValue(IsSelectedProperty, value); }
         public bool KeyboardSelected { get => (bool)GetValue(KeyboardSelectedProperty); internal set => SetValue(KeyboardSelectedProperty, value); }
+        public bool SelectionOutlineVisible { get => (bool)GetValue(SelectionOutlineVisibleProperty); internal set => SetValue(SelectionOutlineVisibleProperty, value); }
         internal bool IsFiltered => Parent is Border { Visibility: Visibility.Hidden } or
             Grid { Parent: Border { Visibility: Visibility.Hidden } };
 

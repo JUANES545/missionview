@@ -66,7 +66,7 @@ public sealed class SettingsPresentationTests
                 var line = Assert.IsType<TextBlock>(links[^1].Parent);
                 links[^1].BringIntoView();
                 root.UpdateLayout();
-                var scroll = Visual(root).OfType<ScrollViewer>().Single(s => s.Content is DockPanel);
+                var scroll = PageScroll(root);
                 var viewport = Visual(scroll).OfType<ScrollContentPresenter>().First();
                 double bottom = line.TranslatePoint(new Point(0, line.ActualHeight), viewport).Y;
                 Assert.True(bottom <= viewport.ActualHeight + 1, $"Last credit bottom={bottom}, viewport={viewport.ActualHeight}");
@@ -84,7 +84,8 @@ public sealed class SettingsPresentationTests
             {
                 Assert.Equal("MissionView", window.Title);
                 Assert.Equal("MissionView settings", new WindowAutomationPeer(window).GetName());
-                Assert.Contains(Logical(window).OfType<TextBlock>(), text => text.Text == "Settings");
+                Assert.Single(Logical(window).OfType<TextBlock>(), text => text.Text == "MissionView");
+                Assert.DoesNotContain(Logical(window).OfType<TextBlock>(), text => text.Text == "Settings");
                 Assert.DoesNotContain(Logical(window).OfType<TextBlock>(), text => text.Text == "MissionView settings");
                 var links = Logical(window).OfType<Hyperlink>().ToArray();
                 Assert.Equal(new[]
@@ -105,9 +106,79 @@ public sealed class SettingsPresentationTests
         });
 
     [Theory]
+    [InlineData(320, 28)]
+    [InlineData(376, 28)]
+    [InlineData(720, 14)]
+    [InlineData(1024, 14)]
+    public void TitleBarKeepsSearchAndBrandOutOfNativeCaptionButtons(double width, double font)
+        => Sta(() =>
+        {
+            var window = Create();
+            try
+            {
+                window.FontSize = font;
+                var root = Assert.IsType<DockPanel>(window.Content);
+                var search = Logical(root).OfType<TextBox>().Single(t => AutomationProperties.GetName(t) == "Search settings");
+                var field = Assert.IsType<Grid>(search.Parent);
+                var header = Assert.IsType<Grid>(field.Parent);
+                Layout(root, width, font >= 28 ? window.MinHeight : 480);
+                var chrome = System.Windows.Shell.WindowChrome.GetWindowChrome(window);
+                Assert.True(chrome.UseAeroCaptionButtons);
+                Assert.InRange(Math.Abs(chrome.GlassFrameThickness.Top - header.RowDefinitions[0].ActualHeight), 0, 1);
+                Assert.Equal("MissionView", window.Title);
+                Assert.True(System.Windows.Shell.WindowChrome.GetIsHitTestVisibleInChrome(field));
+                Assert.True(System.Windows.Shell.WindowChrome.GetIsHitTestVisibleInChrome(search));
+                var brand = Logical(header).OfType<TextBlock>().Single(t => t.Text == "MissionView");
+                var origin = search.TranslatePoint(new Point(), header);
+                Assert.True(search.ActualWidth >= (width >= 376 ? 72 : 20));
+                Assert.True(search.ActualHeight >= font + search.Padding.Top + search.Padding.Bottom);
+                Assert.InRange(Math.Abs(origin.Y + search.ActualHeight / 2 - header.RowDefinitions[0].ActualHeight / 2), 0, 1);
+                Assert.True(brand.TranslatePoint(new Point(brand.ActualWidth, 0), header).X < origin.X);
+                Assert.True(origin.X + search.ActualWidth < header.ActualWidth - header.ColumnDefinitions[2].ActualWidth);
+                Assert.InRange(Math.Abs(origin.X + search.ActualWidth / 2 - header.ActualWidth / 2), 0, 1);
+                search.Text = "overview";
+                Layout(root, width, 480);
+                var results = FilteredSettings(root);
+                Assert.True(results.ViewportHeight > 0);
+                Assert.True(results.TranslatePoint(new Point(), root).Y >= header.ActualHeight);
+                Assert.Equal(Dock.Top, DockPanel.GetDock(header));
+                search.Clear();
+                Layout(root, width, font >= 28 ? window.MinHeight : 480);
+                Assert.True(PageScroll(root).ViewportHeight >= font);
+            }
+            finally { window.Close(); }
+        });
+
+    [Fact]
+    public void SettingsPaintsItsSurfaceWithoutCoveringTheNativeCaptionLane()
+        => Sta(() =>
+        {
+            var window = Create();
+            try
+            {
+                var root = Assert.IsType<DockPanel>(window.Content);
+                Layout(root, 720, 480);
+                Assert.Equal(0, Assert.IsType<SolidColorBrush>(window.Background).Color.A);
+                var bitmap = new RenderTargetBitmap(720, 480, 96, 96, PixelFormats.Pbgra32);
+                bitmap.Render(root);
+                byte AlphaAt(int x, int y)
+                {
+                    var pixel = new byte[4];
+                    bitmap.CopyPixels(new Int32Rect(x, y, 1, 1), pixel, 4, 0);
+                    return pixel[3];
+                }
+                Assert.Equal(255, AlphaAt(5, 15));
+                Assert.Equal(0, AlphaAt(700, 15));
+                Assert.Equal(255, AlphaAt(5, 350));
+            }
+            finally { window.Close(); }
+        });
+
+    [Theory]
     [InlineData(720, 480, 14)]
     [InlineData(720, 720, 14)]
     [InlineData(720, 1000, 14)]
+    [InlineData(320, 260, 14)]
     [InlineData(360, 600, 28)]
     [InlineData(1000, 900, 14)]
     public void SettingsUseOneOverflowSurfaceAndKeepTheFirstRowBelowTheTabs(double width, double height, double font)
@@ -125,11 +196,15 @@ public sealed class SettingsPresentationTests
                 Layout(root, width, height);
                 var selected = (TabItem)tabs.SelectedItem;
                 var form = CategoryForm(selected);
-                var outer = Visual(root).OfType<ScrollViewer>().Single(s => s.Content is DockPanel);
+                var outer = PageScroll(root);
                 var firstRow = form.Children.OfType<Grid>().First();
                 double firstRowTop = firstRow.TranslatePoint(new Point(), root).Y;
-                double headerBottom = tabs.Items.Cast<TabItem>().Max(t => t.TranslatePoint(new Point(0, t.ActualHeight), root).Y);
-                var surfaces = Visual(root).OfType<ScrollViewer>().Where(s => s == outer || s.Content == form).ToArray();
+                var headers = tabs.Items.Cast<TabItem>().ToArray();
+                var headerPositions = headers.Select(t => t.TranslatePoint(new Point(), root)).ToArray();
+                double headerBottom = headers.Max(t => t.TranslatePoint(new Point(0, t.ActualHeight), root).Y);
+                var surfaces = Visual(root).OfType<ScrollViewer>().Where(firstRow.IsDescendantOf).ToArray();
+                Assert.False(headers[0].IsDescendantOf(outer));
+                Assert.Same(outer, Assert.Single(surfaces));
                 Capture(root, $"settings-fit-client-{width}-{height}-font{font}-offscreen.png");
                 string? directory = Environment.GetEnvironmentVariable("MISSIONVIEW_SETTINGS_FIXTURES");
                 if (directory != null)
@@ -137,8 +212,12 @@ public sealed class SettingsPresentationTests
                         System.Text.Json.JsonSerializer.Serialize(new { width, height, font, firstRowTop, headerBottom,
                             viewport = outer.ViewportHeight, extent = outer.ExtentHeight, scroll = outer.ScrollableHeight,
                             surfaces = surfaces.Select(s => new { s.ActualHeight, s.ViewportHeight, s.ExtentHeight }) }));
-                Assert.Single(surfaces);
                 Assert.InRange(firstRowTop - headerBottom, 0, 25);
+                var viewport = Visual(outer).OfType<ScrollContentPresenter>().First();
+                Point outerEdge = outer.TranslatePoint(new Point(outer.ActualWidth, outer.ActualHeight), root);
+                Assert.InRange(root.ActualWidth - outerEdge.X, -1, 1);
+                Assert.InRange(root.ActualHeight - outerEdge.Y, -1, 1);
+                Assert.True(firstRow.TranslatePoint(new Point(), viewport).X >= 16);
                 if (height >= 720 && font == 14) Assert.Equal(0, outer.ScrollableHeight);
                 var reset = NamedButton(window, "Reset settings");
                 reset.BringIntoView();
@@ -147,6 +226,28 @@ public sealed class SettingsPresentationTests
                 Assert.InRange(point.Y, 0, outer.ViewportHeight);
                 Assert.True(point.Y + reset.ActualHeight <= outer.ViewportHeight + 1);
                 Capture(root, $"settings-fit-client-{width}-{height}-font{font}-end-offscreen.png");
+                if (outer.ScrollableHeight > 0)
+                {
+                    outer.ScrollToEnd();
+                    root.UpdateLayout();
+                    Assert.True(outer.VerticalOffset > 0);
+                    Assert.Equal(headerPositions, headers.Select(t => t.TranslatePoint(new Point(), root)));
+                    Assert.True(firstRow.TranslatePoint(new Point(), root).Y < firstRowTop);
+                    var lastRow = form.Children.OfType<Grid>().Last();
+                    double bottom = lastRow.TranslatePoint(new Point(0, lastRow.ActualHeight), viewport).Y;
+                    Assert.InRange(viewport.ActualHeight - bottom, 16, 32);
+                    var bar = Assert.IsType<ScrollBar>(outer.Template.FindName("PART_VerticalScrollBar", outer));
+                    Assert.Equal(Visibility.Visible, bar.Visibility);
+                    var barEdge = bar.TranslatePoint(new Point(bar.ActualWidth, bar.ActualHeight), root);
+                    Assert.InRange(root.ActualWidth - barEdge.X, -1, 1);
+                    Assert.InRange(root.ActualHeight - barEdge.Y, -1, 1);
+                    tabs.SelectedIndex = 1;
+                    Layout(root, width, height);
+                    tabs.SelectedIndex = 0;
+                    Layout(root, width, height);
+                    Assert.Equal(0, outer.VerticalOffset);
+                    Assert.Equal(headerPositions, headers.Select(t => t.TranslatePoint(new Point(), root)));
+                }
             }
             finally { window.Close(); }
         });
@@ -207,7 +308,7 @@ public sealed class SettingsPresentationTests
                 Layout(root, 720, 1000);
                 Capture(root, "settings-resize-client-720-1000-offscreen.png");
                 Assert.Equal(top, row.TranslatePoint(new Point(), root).Y);
-                var scroll = Visual(root).OfType<ScrollViewer>().Single(s => s.Content is DockPanel);
+                var scroll = PageScroll(root);
                 Assert.Equal(0, scroll.ScrollableHeight);
             }
             finally { window.Close(); }
@@ -238,7 +339,7 @@ public sealed class SettingsPresentationTests
                 Assert.Equal(-1, attributes[36]);
                 Assert.True(window.ApplyNativeCaption(false, Set));
                 Assert.Equal(1, attributes[20]);
-                Assert.Equal(ColorRef(((SolidColorBrush)window.Background).Color), attributes[35]);
+                Assert.Equal(ColorRef(SharedBrushes.Graphite.Color), attributes[35]);
                 Assert.Equal(ColorRef(((SolidColorBrush)window.Foreground).Color), attributes[36]);
                 Assert.False(window.ApplyNativeCaption(false, (_, _, _) => unchecked((int)0x80070057)));
             }
@@ -266,11 +367,20 @@ public sealed class SettingsPresentationTests
                 Layout(root, 360, 600);
                 var headers = tabs.Items.Cast<TabItem>().ToArray();
                 var bounds = headers.Select(h => new Rect(h.TranslatePoint(new Point(), root), h.RenderSize)).ToArray();
+                var selectedUnderline = SystemParameters.HighContrast ? SystemColors.HighlightBrush.Color : Color.FromRgb(125, 219, 155);
                 Assert.True(bounds[0].Top <= bounds[1].Top && bounds[1].Top <= bounds[2].Top && bounds[2].Top <= bounds[3].Top);
                 for (int index = 0; index < headers.Length; index++)
                 {
                     tabs.SelectedIndex = index;
                     Layout(root, 360, 600);
+                    for (int header = 0; header < headers.Length; header++)
+                    {
+                        var tab = headers[header];
+                        var frame = Assert.IsType<Border>(tab.Template.FindName("TabFrame", tab));
+                        Assert.Same(window.Resources[tab.GetType()], tab.Style);
+                        var underline = Assert.IsType<SolidColorBrush>(frame.BorderBrush);
+                        Assert.Equal(header == index ? selectedUnderline : Colors.Transparent, underline.Color);
+                    }
                     Assert.Equal(bounds, headers.Select(h => new Rect(h.TranslatePoint(new Point(), root), h.RenderSize)));
                     Assert.All(headers, h => Assert.True(h.TranslatePoint(new Point(), root).X + h.ActualWidth <= 360));
                     Capture(root, $"settings-wrapped-tabs-360-600-font28-tab{index}-offscreen.png");
@@ -291,7 +401,7 @@ public sealed class SettingsPresentationTests
                 var root = new Border { Background = window.Background, Child = content };
                 window.Content = root;
                 Layout(root, 360, 480);
-                var scroll = Visual(root).OfType<ScrollViewer>().Single(s => s.Content is DockPanel);
+                var scroll = PageScroll(root);
                 var bar = Visual(scroll).OfType<ScrollBar>().Single(b => b.Orientation == Orientation.Vertical);
                 var track = Assert.IsType<Track>(bar.Template.FindName("PART_Track", bar));
                 Assert.True(scroll.ScrollableHeight > 0);
@@ -300,7 +410,7 @@ public sealed class SettingsPresentationTests
                 var ink = Assert.IsType<Border>(track.Thumb.Template.FindName("Ink", track.Thumb));
                 Assert.Same(window.Resources["ScrollThumb"], ink.Background);
                 Assert.InRange(ink.ActualWidth, 4, 8);
-                Assert.True(BrushContrast(ink.Background, window.Background) >= 3);
+                Assert.True(BrushContrast(ink.Background, window.Resources["SettingsSurface"]) >= 3);
                 scroll.RaiseEvent(new System.Windows.Input.MouseWheelEventArgs(System.Windows.Input.Mouse.PrimaryDevice, 0, -120)
                     { RoutedEvent = UIElement.MouseWheelEvent });
                 root.UpdateLayout();
@@ -457,7 +567,7 @@ public sealed class SettingsPresentationTests
             {
                 window.FontSize = font;
                 var tabs = Logical(window).OfType<TabControl>().Single();
-                Assert.Equal(new[] { "General", "Shortcuts", "Hot corners", "Updates & About" },
+                Assert.Equal(new[] { "General", "Shortcuts", "Hot corners", "Updates & About", "Experimental" },
                     tabs.Items.Cast<TabItem>().Select(t => t.Header));
                 var content = (UIElement)window.Content;
                 window.Content = null;
@@ -473,11 +583,11 @@ public sealed class SettingsPresentationTests
                         Assert.Equal(narrow ? 1 : 0, Grid.GetRow(row.Children[1]));
                         Assert.True(((FrameworkElement)row.Children[1]).ActualWidth <= root.ActualWidth);
                     }
-                    var scroll = Visual(root).OfType<ScrollViewer>().Single(s => s.Content is DockPanel);
+                    var scroll = PageScroll(root);
                     if (width == 720)
                     {
                         if (index == 0) Assert.True(scroll.ScrollableHeight > 0,
-                            $"General extent={scroll.ExtentHeight}, viewport={scroll.ViewportHeight}, panel={panel.ActualHeight}, outer={Visual(root).OfType<ScrollViewer>().Single(s => s.Content is DockPanel).ScrollableHeight}");
+                            $"General extent={scroll.ExtentHeight}, viewport={scroll.ViewportHeight}, panel={panel.ActualHeight}, scroll={scroll.ScrollableHeight}");
                         else if (index == 1 && height == 480)
                         {
                             Assert.InRange(scroll.ScrollableHeight, 0, 40);
@@ -505,23 +615,22 @@ public sealed class SettingsPresentationTests
                     }
                     if (height == 300)
                     {
-                        var fallback = Visual(root).OfType<ScrollViewer>().Single(s => s.Content is DockPanel);
-                        Assert.True(fallback.ScrollableHeight > 0);
-                        fallback.ScrollToEnd();
+                        Assert.True(scroll.ScrollableHeight > 0);
+                        scroll.ScrollToEnd();
                         root.UpdateLayout();
                         Capture(root, $"settings-{(int)width}-{(int)height}-font{font}-tab{index}-scrolled.png");
                     }
                 }
                 var startup = Logical(window).OfType<CheckBox>().Single(c => Equals(c.Content, "Start with Windows"));
                 Assert.Contains(startup, Logical(((TabItem)tabs.Items[0]).Content).OfType<CheckBox>());
-                Logical(window).OfType<TextBox>().Single().Text = "invalid";
+                DelayField(window).Text = "invalid";
                 window.CommitDelay();
                 Layout(root, width, height - 40);
                 Assert.Equal(2, tabs.SelectedIndex);
                 Assert.Contains(Logical(window).OfType<TextBlock>(), t => t.Text.StartsWith("Enter a delay"));
                 Capture(root, $"settings-{(int)width}-{(int)height}-font{font}-error.png");
                 Assert.DoesNotContain(Logical(window).OfType<Button>(), b => b.Content is "Save" or "Cancel");
-                Assert.True(System.Windows.Input.KeyboardNavigation.GetTabIndex(tabs)
+                Assert.True(System.Windows.Input.KeyboardNavigation.GetTabIndex(Assert.IsType<Grid>(tabs.Parent))
                     < System.Windows.Input.KeyboardNavigation.GetTabIndex(Logical(window).OfType<StackPanel>()
                         .Single(p => p.Children.OfType<ScrollViewer>().Any(s => s.Content is TextBlock t &&
                             AutomationProperties.GetLiveSetting(t) == AutomationLiveSetting.Assertive))));
@@ -545,6 +654,142 @@ public sealed class SettingsPresentationTests
                 Assert.Null(indicator.ToolTip);
                 Assert.NotEmpty(AutomationProperties.GetHelpText(indicator));
                 Assert.Equal("Collapsed", AutomationProperties.GetItemStatus(indicator));
+            }
+            finally { window.Close(); }
+        });
+
+    [Theory]
+    [InlineData(1, "Overview shortcut help")]
+    [InlineData(2, "Activation help")]
+    public void TabActivationFocusesTheHeaderAndKeyboardTraversalStillFocusesHelp(int index, string helpId)
+        => Sta(() =>
+        {
+            var window = Create();
+            window.ShowInTaskbar = false;
+            try
+            {
+                window.Show();
+                window.UpdateLayout();
+                var tabs = Logical(window).OfType<TabControl>().Single();
+                var tab = (TabItem)tabs.Items[index];
+                tab.RaiseEvent(new MouseButtonEventArgs(Mouse.PrimaryDevice, 0, MouseButton.Left)
+                    { RoutedEvent = UIElement.MouseLeftButtonDownEvent, Source = tab });
+                Assert.Same(tab, tabs.SelectedItem);
+                Assert.True(tab.IsKeyboardFocused);
+                window.UpdateLayout();
+                Assert.NotNull(tab.FocusVisualStyle);
+                Assert.IsType<Border>(tab.Template.FindName("TabFrame", tab));
+                var help = NamedButton(window, helpId);
+                var frame = Assert.IsType<Border>(help.Template.FindName("Frame", help));
+                Assert.Same(Brushes.Transparent, frame.BorderBrush);
+                Assert.True(tab.MoveFocus(new TraversalRequest(FocusNavigationDirection.Next)));
+                Assert.True(help.IsKeyboardFocused);
+                var focusBrush = frame.BorderBrush;
+                Assert.NotSame(Brushes.Transparent, focusBrush);
+                window.UpdateLayout();
+                Assert.Same(focusBrush, frame.BorderBrush);
+                Assert.Equal("Collapsed", AutomationProperties.GetItemStatus(help));
+
+                Assert.True(window.HandleSearchKey(Key.K, ModifierKeys.Control));
+                var input = Logical(window).OfType<TextBox>().Single(t => AutomationProperties.GetName(t) == "Search settings");
+                Assert.True(input.IsKeyboardFocused);
+                input.Text = "selection border";
+                Assert.False(window.HandleSearchKey(Key.Enter, ModifierKeys.None));
+                Assert.Equal(index, tabs.SelectedIndex);
+                Assert.True(input.IsKeyboardFocused);
+                Assert.True(window.HandleSearchKey(Key.Escape, ModifierKeys.None));
+                Assert.Empty(input.Text);
+                Assert.True(help.IsKeyboardFocused);
+            }
+            finally { window.Close(); }
+        });
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void SearchShowsRealRowsWithoutSavingAndRestoresThePreviousTab(bool hasAutomaticUpdates)
+        => Sta(() =>
+        {
+            var source = new AppSettings();
+            int saves = 0;
+            bool Save(AppSettings candidate)
+            {
+                saves++;
+                source.CopyFrom(candidate);
+                return true;
+            }
+            using var service = new UpdateService(new RejectNetwork(), () => hasAutomaticUpdates);
+            using var controller = new UpdateController(service, new(0, 1, 0), () => throw new InvalidOperationException("Search must not shut down."),
+                _ => throw new InvalidOperationException("Search must not start an installer."), null, () => true);
+            var updates = new UpdatePanel(controller, (_, _) => throw new InvalidOperationException("Search must not ask for consent."), source, Save);
+            var window = new SettingsWindow(source, Save,
+                updates, () => true, confirmReset: () => throw new InvalidOperationException("Search must not reset."));
+            try
+            {
+                var root = Assert.IsType<DockPanel>(window.Content);
+                var field = Logical(root).OfType<TextBox>().Single(t => AutomationProperties.GetName(t) == "Search settings");
+                Assert.Equal("Ctrl+K", AutomationProperties.GetAcceleratorKey(field));
+                var tabs = Logical(root).OfType<TabControl>().Single();
+                var results = FilteredSettings(root);
+                var startup = Logical(window).OfType<CheckBox>().Single(c => Equals(c.Content, "Start with Windows"));
+                var originalOwner = ((FrameworkElement)startup.Parent).Parent;
+                Layout(root, 360, 340);
+                var page = PageScroll(root);
+                page.ScrollToEnd();
+                root.UpdateLayout();
+                double initialOffset = page.VerticalOffset;
+                Assert.True(initialOffset > 0);
+                field.Text = "startup";
+                Layout(root, 360, 340);
+                Assert.Equal(Visibility.Collapsed, tabs.Visibility);
+                Assert.Same(startup, Assert.Single(Logical(results).OfType<CheckBox>()));
+                Assert.Equal(0, saves);
+                startup.IsChecked = !source.RunOnStartup;
+                Assert.Equal(1, saves);
+                Assert.Equal(source.RunOnStartup, startup.IsChecked == true);
+                field.Text = "  ";
+                Layout(root, 360, 340);
+                Assert.Same(originalOwner, ((FrameworkElement)startup.Parent).Parent);
+                Assert.Equal(initialOffset, page.VerticalOffset);
+
+                tabs.SelectedIndex = 1;
+                ClickRecorder(NamedButton(window, "Overview shortcut"));
+                Assert.False(window.HandleSearchKey(Key.K, ModifierKeys.Control));
+                Assert.True(window.IsRecordingShortcut);
+                tabs.SelectedIndex = 2;
+                Assert.False(window.IsRecordingShortcut);
+
+                field.Text = "restore defaults";
+                Layout(root, 360, 340);
+                Assert.Contains(NamedButton(window, "Reset settings"), Logical(results).OfType<Button>());
+                Assert.Equal(2, tabs.SelectedIndex);
+                Assert.False(window.HandleSearchKey(Key.Enter, ModifierKeys.None));
+
+                field.Text = "update";
+                Assert.Contains(updates.ActionRow, Logical(results));
+                field.Text = "auto update";
+                Assert.DoesNotContain(updates.ActionRow, Logical(results));
+                if (hasAutomaticUpdates)
+                {
+                    var automatic = Assert.Single(updates.AutomaticRow!.Children.OfType<CheckBox>());
+                    Assert.Same(automatic, Assert.Single(Logical(results).OfType<CheckBox>()));
+                    Assert.False(automatic.IsChecked);
+                    Assert.False(source.InstallUpdatesAutomatically);
+                }
+                else
+                {
+                    Assert.Null(updates.AutomaticRow);
+                    Assert.Empty(Logical(results).OfType<CheckBox>());
+                    var status = Logical(results).OfType<TextBlock>().Single(t => t.Text == "No matching settings");
+                    Assert.Equal(Visibility.Visible, status.Visibility);
+                }
+                Assert.Equal(1, saves);
+                Assert.Equal(UpdateStatus.Idle, controller.State.Status);
+                Assert.True(window.HandleSearchKey(Key.Escape, ModifierKeys.None));
+                Assert.Empty(field.Text);
+                Assert.Equal(Visibility.Collapsed, results.Visibility);
+                Assert.Equal(Visibility.Visible, tabs.Visibility);
+                Assert.Equal(2, tabs.SelectedIndex);
             }
             finally { window.Close(); }
         });
@@ -628,7 +873,7 @@ public sealed class SettingsPresentationTests
                 window.Content = root;
                 Layout(root, 720, 440);
                 var combo = Logical(window).OfType<ComboBox>().Single(c => AutomationProperties.GetName(c) == "Corner");
-                var delay = Logical(window).OfType<TextBox>().Single();
+                var delay = DelayField(window);
                 Assert.IsType<ScrollViewer>(delay.Template.FindName("PART_ContentHost", delay));
                 Assert.IsType<Popup>(combo.Template.FindName("PART_Popup", combo));
                 var comboPeer = UIElementAutomationPeer.CreatePeerForElement(combo)!;
@@ -698,11 +943,10 @@ public sealed class SettingsPresentationTests
                 window.Content = root;
                 window.ShowUpdates();
                 Layout(root, 720, 440);
-                var scroll = Visual(root).OfType<ScrollViewer>().Single(s => s.Content is DockPanel);
+                var scroll = PageScroll(root);
                 Assert.Equal(0, scroll.ScrollableHeight);
-                Assert.Equal(0, Visual(root).OfType<ScrollViewer>().Single(s => s.Content is DockPanel).ScrollableHeight);
                 Assert.Equal(UpdateStatus.Idle, controller.State.Status);
-                Assert.True(panel.Children.OfType<Button>().First().IsEnabled);
+                Assert.True(panel.ActionRow.Children.OfType<Button>().First().IsEnabled);
                 Capture(root, "settings-720-480-actual-idle-updates.png");
             }
             finally { window.Close(); }
@@ -741,7 +985,7 @@ public sealed class SettingsPresentationTests
                 var root = new Border { Background = window.Background, Child = content };
                 window.Content = root;
                 Layout(root, width, 440);
-                var outer = Visual(root).OfType<ScrollViewer>().Single(s => s.Content is DockPanel);
+                var outer = PageScroll(root);
                 var dimming = Logical(window).OfType<Slider>().Single();
                 dimming.Value = 78.5;
                 dimming.BringIntoView();
@@ -774,12 +1018,12 @@ public sealed class SettingsPresentationTests
                 window.Content = null;
                 var root = new Border { Background = window.Background, Child = content };
                 window.Content = root;
-                var delay = Logical(window).OfType<TextBox>().Single();
+                var delay = DelayField(window);
                 Layout(root, 360, 440);
                 delay.Text = "invalid";
                 window.CommitDelay();
                 Layout(root, 360, 440);
-                var scroll = Visual(root).OfType<ScrollViewer>().Single(s => s.Content is DockPanel);
+                var scroll = PageScroll(root);
                 Assert.True(scroll.ViewportHeight > 0);
                 Assert.True(delay.ActualHeight > 0);
                 Assert.True(scroll.ScrollableHeight > 0);
@@ -843,7 +1087,7 @@ public sealed class SettingsPresentationTests
             try
             {
                 var tabs = Logical(window).OfType<TabControl>().Single();
-                var delay = Logical(window).OfType<TextBox>().Single();
+                var delay = DelayField(window);
                 delay.Text = "invalid";
                 window.CommitDelay();
                 Assert.Equal(2, tabs.SelectedIndex);
@@ -865,7 +1109,7 @@ public sealed class SettingsPresentationTests
             var window = new SettingsWindow(source, value => { saved = value; return true; }, new TextBlock(), () => true);
             try
             {
-                Logical(window).OfType<TextBox>().Single().Text = "725";
+                DelayField(window).Text = "725";
                 window.CommitDelay();
                 Assert.NotNull(saved);
                 Assert.Equal(appShortcut, saved.AppExposeHotkey);
@@ -1026,6 +1270,8 @@ public sealed class SettingsPresentationTests
         .RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
     private static Button NamedButton(Window window, string name) =>
         Logical(window).OfType<Button>().Single(b => AutomationProperties.GetAutomationId(b) == name);
+    private static TextBox DelayField(Window window) =>
+        Logical(window).OfType<TextBox>().Single(t => AutomationProperties.GetAutomationId(t) == "Delay (milliseconds)");
 
     private static IEnumerable<DependencyObject> Logical(object parent)
     {
@@ -1036,6 +1282,15 @@ public sealed class SettingsPresentationTests
             foreach (var next in Logical(child)) yield return next;
         }
     }
+
+    private static ScrollViewer PageScroll(DependencyObject root)
+    {
+        var tabs = Assert.Single(Logical(root).OfType<TabControl>());
+        return Assert.IsType<ScrollViewer>(tabs.Template.FindName("PageScroll", tabs));
+    }
+
+    private static ScrollViewer FilteredSettings(DependencyObject root) =>
+        Assert.Single(Logical(root).OfType<ScrollViewer>().Where(scroll => scroll.Name == "FilteredSettings"));
 
     private static IEnumerable<DependencyObject> Visual(DependencyObject root)
     {

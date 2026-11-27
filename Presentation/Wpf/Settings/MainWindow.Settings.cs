@@ -80,6 +80,8 @@ public partial class MainWindow
             catch (Exception error) { failures.Add(error); }
             if (failures.Count > 0) throw new AggregateException("Windows could not restore all previous preferences.", failures);
         }, ReportSettingsError, hotkeyChanged ? () => ApplyConfiguredHotkey(candidate) : null);
+        if (applied && settings.InstallUpdatesAutomatically != previous.InstallUpdatesAutomatically)
+            ApplyAutomaticUpdatesPreference();
         RefreshTrayPreferences();
         return applied;
     }

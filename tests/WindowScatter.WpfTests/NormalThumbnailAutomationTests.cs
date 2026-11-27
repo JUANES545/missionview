@@ -16,6 +16,269 @@ using Xunit;
 
 public class NormalThumbnailAutomationTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void AcceptedCloseHidesOnlyTheOutlineAndAnExplicitSelectionCycleRestoresIt(bool minimized)
+        => RunSta(() =>
+        {
+            var identity = new WindowActivationTarget(new(42), 1, 2);
+            var window = new WindowInfo { Handle = identity.Handle, Identity = identity, Title = "Synthetic document", WasMinimized = minimized };
+            var strip = minimized
+                ? new MinimizedWindowStrip([window], 900, 700, 1, _ => { }, _ => { }, _ => null) : null;
+            var thumb = strip?.Thumbs.Single() ?? new WindowThumb
+            {
+                WindowHandle = identity.Handle, Identity = identity, Title = window.Title,
+                ClickBorder = new OverviewThumbnail(window.Title), HighlightBorder = new Border(), TitleLabel = new TextBlock()
+            };
+            var manager = new ThumbnailManager(new Canvas(), minimized ? [] : [thumb], IntPtr.Zero, _ => { }, _ => { });
+            void Select(IntPtr handle)
+            {
+                if (strip != null) strip.SetSelected(handle);
+                else manager.SetSelectedWindow(handle);
+            }
+            bool OutlineVisible() => thumb.MinimizedButton?.SelectionOutlineVisible ??
+                (thumb.HighlightBorder.Visibility == Visibility.Visible && thumb.HighlightBorder.Opacity == 1);
+            var close = new WindowClose(_ => identity, _ => (true, 0));
+            Select(identity.Handle);
+            Assert.True(OutlineVisible());
+            close.Request(identity);
+            thumb.SuppressSelectionOutlineForClose();
+            Assert.True(close.IsPending(identity));
+            Assert.False(OutlineVisible());
+            if (strip != null)
+            {
+                var button = thumb.MinimizedButton!;
+                button.ApplyTemplate();
+                var frame = (Border)button.Template.FindName("Frame", button);
+                Assert.Equal(Colors.Transparent, Assert.IsType<SolidColorBrush>(frame.BorderBrush).Color);
+                Assert.True(button.IsSelected);
+                strip.SetSelectionOutlinesVisible(false);
+                strip.SetSelected(identity.Handle);
+                strip.SetSelectionOutlinesVisible(true);
+            }
+            else
+            {
+                manager.BeginTransition(() => manager.SetSelectedWindow(identity.Handle));
+                manager.CompleteTransition(1, identity.Handle);
+            }
+            Assert.False(OutlineVisible());
+            Assert.Equal(Visibility.Visible, thumb.ClickBorder.Visibility);
+            Assert.True(thumb.MatchesTitle(""));
+            Select(identity.Handle);
+            Assert.False(OutlineVisible());
+            Assert.Empty(close.ConfirmClosed());
+            Select(IntPtr.Zero);
+            Select(identity.Handle);
+            Assert.True(OutlineVisible());
+            Assert.Equal(Visibility.Visible, thumb.TitleLabel.Visibility);
+        });
+
+    [Fact]
+    public void UnchangedMinimizedSourcesCanBeRetainedButReusedOrRemovedSourcesCannot()
+        => RunSta(() =>
+        {
+            var identity = new WindowActivationTarget(new(42), 1, 2);
+            var window = new WindowInfo { Handle = identity.Handle, Identity = identity, Title = "Synthetic document", WasMinimized = true };
+            var strip = new MinimizedWindowStrip([window], 900, 700, 1, _ => { }, _ => { }, _ => null);
+            var thumb = Assert.Single(strip.Thumbs);
+            Assert.True(strip.CanKeepWindowsAfterClose([window]));
+            window.Identity = new(identity.Handle, 9, 2);
+            Assert.False(strip.CanKeepWindowsAfterClose([window]));
+            Assert.False(strip.CanKeepWindowsAfterClose([]));
+            Assert.Same(thumb, Assert.Single(strip.Thumbs));
+        });
+
+    [Fact]
+    public void RejectedCloseLeavesTheSelectedOutlineVisible()
+        => RunSta(() =>
+        {
+            var identity = new WindowActivationTarget(new(42), 1, 2);
+            var thumb = new WindowThumb
+            {
+                WindowHandle = identity.Handle, Identity = identity, ClickBorder = new OverviewThumbnail("Synthetic document"),
+                HighlightBorder = new Border(), TitleLabel = new TextBlock()
+            };
+            var manager = new ThumbnailManager(new Canvas(), [thumb], IntPtr.Zero, _ => { }, _ => { });
+            manager.SetSelectedWindow(identity.Handle);
+            var close = new WindowClose(_ => identity, _ => (false, 5));
+            Assert.Throws<System.ComponentModel.Win32Exception>(() =>
+            {
+                close.Request(identity);
+                thumb.SuppressSelectionOutlineForClose();
+            });
+            Assert.False(close.HasPending);
+            Assert.Equal(Visibility.Visible, thumb.HighlightBorder.Visibility);
+            Assert.Equal(1, thumb.HighlightBorder.Opacity);
+        });
+
+    [Fact]
+    public void SelectionAndFilterCannotRevealAnOutlineDuringTransitionAndSettlementUsesFinalBounds()
+        => RunSta(() =>
+        {
+            var thumb = new WindowThumb
+            {
+                WindowHandle = new(42), Title = "Synthetic document",
+                ClickBorder = new OverviewThumbnail("Synthetic document"), HighlightBorder = new Border(), TitleLabel = new TextBlock(),
+                CurrentX = 40, CurrentY = 60, CurrentWidth = 300, CurrentHeight = 200
+            };
+            var manager = new ThumbnailManager(new Canvas(), [thumb], IntPtr.Zero, _ => { }, _ => { });
+            manager.SetSelectedWindow(thumb.WindowHandle);
+            manager.BeginTransition(() =>
+            {
+                manager.SetSelectedWindow(thumb.WindowHandle);
+                manager.SetAutomationSelection(thumb.WindowHandle);
+                manager.ApplyTitleFilter("");
+                manager.ApplyPalette(true, false);
+                manager.ShowLabels(true);
+                Assert.Equal(Visibility.Hidden, thumb.HighlightBorder.Visibility);
+                Assert.Equal(0, thumb.HighlightBorder.Opacity);
+            });
+            thumb.CurrentX = 120;
+            thumb.CurrentY = 80;
+            manager.SyncClickBordersToThumbs(2);
+            Assert.Equal(Visibility.Hidden, thumb.HighlightBorder.Visibility);
+            manager.CompleteTransition(2, thumb.WindowHandle);
+            Assert.Equal((55d, 35d, 160d, 110d),
+                (Canvas.GetLeft(thumb.HighlightBorder), Canvas.GetTop(thumb.HighlightBorder), thumb.HighlightBorder.Width, thumb.HighlightBorder.Height));
+            Assert.Equal(Visibility.Visible, thumb.HighlightBorder.Visibility);
+            Assert.Equal(1, thumb.HighlightBorder.Opacity);
+        });
+
+    [Theory]
+    [InlineData("unchanged", true)]
+    [InlineData("moved", false)]
+    [InlineData("resized", false)]
+    [InlineData("reused", false)]
+    [InlineData("added", false)]
+    [InlineData("metadata", false)]
+    [InlineData("unsettled", false)]
+    [InlineData("unregistered", false)]
+    public void CloseRefreshKeepsOnlyUnchangedSettledSourceRegistrations(string change, bool retained)
+        => RunSta(() =>
+        {
+            var identity = new WindowActivationTarget(new(42), 1, 2);
+            var thumb = new WindowThumb
+            {
+                WindowHandle = identity.Handle, Identity = identity, Title = "Synthetic document", ThumbnailHandle = new(701),
+                StartX = 100, StartY = 200, StartWidth = 1000, StartHeight = 800,
+                CurrentX = 50, CurrentY = 60, CurrentWidth = 500, CurrentHeight = 400,
+                TargetX = 50, TargetY = 60, TargetWidth = 500, TargetHeight = 400
+            };
+            var windows = new List<WindowInfo> { new()
+            {
+                Handle = identity.Handle, Identity = identity, Title = thumb.Title,
+                OriginalRect = new() { Left = 100, Top = 200, Right = 1100, Bottom = 1000 }
+            } };
+            switch (change)
+            {
+                case "moved": windows[0].OriginalRect.Left++; windows[0].OriginalRect.Right++; break;
+                case "resized": windows[0].OriginalRect.Right++; break;
+                case "reused": windows[0].Identity = new(identity.Handle, 9, 2); break;
+                case "added": windows.Add(new() { Handle = new(43), Identity = new(new(43), 1, 2) }); break;
+                case "metadata": windows[0].Title = "Changed title"; break;
+                case "unsettled": thumb.CurrentX++; break;
+                case "unregistered": thumb.ThumbnailHandle = IntPtr.Zero; break;
+            }
+            var thumbs = new List<WindowThumb> { thumb };
+            var manager = new ThumbnailManager(new Canvas(), thumbs, IntPtr.Zero, _ => { }, _ => { },
+                register: _ => throw new Exception("Retaining an unchanged source must not register a new thumbnail."));
+            IntPtr[] order = [identity.Handle];
+            Assert.Equal(retained, manager.TryKeepLayoutAfterClose(windows, order));
+            Assert.Same(thumb, Assert.Single(thumbs));
+            Assert.Equal(change == "unregistered" ? IntPtr.Zero : new IntPtr(701), thumb.ThumbnailHandle);
+            Assert.Equal((50d, 60d, 500d, 400d), (thumb.TargetX, thumb.TargetY, thumb.TargetWidth, thumb.TargetHeight));
+            Assert.Equal(retained, ReferenceEquals(order, manager.SourceOrder));
+        });
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ConfirmedCloseRetiresOnlyDeadSourceBeforeRebuildAndCannotBeRevealedAgain(bool reusedHandle)
+        => RunSta(() =>
+        {
+            var closedIdentity = new WindowActivationTarget(new(42), 1, 2);
+            var pendingIdentity = new WindowActivationTarget(new(43), 1, 2);
+            var identities = new Dictionary<IntPtr, WindowActivationTarget>
+            { [closedIdentity.Handle] = closedIdentity, [pendingIdentity.Handle] = pendingIdentity };
+            var close = new WindowClose(handle => identities.GetValueOrDefault(handle), _ => (true, 0));
+            WindowThumb Thumb(WindowActivationTarget identity)
+            {
+                var thumb = new WindowThumb
+                {
+                    WindowHandle = identity.Handle, Identity = identity, Title = "Synthetic document",
+                    ClickBorder = new OverviewThumbnail("Synthetic document"), HighlightBorder = new Border(),
+                    TitleLabel = new TextBlock()
+                };
+                OverviewCloseInput.Attach(thumb, thumb.Title, () => false, () => { });
+                return thumb;
+            }
+            var dead = Thumb(closedIdentity);
+            var pending = Thumb(pendingIdentity);
+            dead.ThumbnailHandle = new(701);
+            pending.ThumbnailHandle = new(702);
+            var released = new List<IntPtr>();
+            int Release(IntPtr thumbnail) { released.Add(thumbnail); return 0; }
+            var thumbs = new List<WindowThumb> { dead, pending };
+            var manager = new ThumbnailManager(new Canvas(), thumbs, IntPtr.Zero, _ => { }, _ => { });
+            close.Request(closedIdentity);
+            close.Request(pendingIdentity);
+            manager.SetSelectedWindow(closedIdentity.Handle);
+            manager.HideClosedSources([closedIdentity, pendingIdentity], close.IsClosed, Release);
+            Assert.Empty(released);
+            Assert.Equal(Visibility.Visible, dead.HighlightBorder.Visibility);
+            if (reusedHandle) identities[closedIdentity.Handle] = new(closedIdentity.Handle, 9, 2);
+            else identities.Remove(closedIdentity.Handle);
+            var closed = close.ConfirmClosed();
+            Assert.Equal(closedIdentity, Assert.Single(closed));
+            manager.HideClosedSources(closed, close.IsClosed, Release);
+            manager.HideClosedSources(closed, close.IsClosed, Release);
+            Assert.Equal(new IntPtr(701), Assert.Single(released));
+            Assert.Equal(IntPtr.Zero, dead.ThumbnailHandle);
+            Assert.Equal(new IntPtr(702), pending.ThumbnailHandle);
+            Assert.Same(pending, Assert.Single(thumbs));
+            Assert.True(close.IsPending(pendingIdentity));
+            manager.SetSelectedWindow(closedIdentity.Handle);
+            manager.ApplyTitleFilter("");
+            manager.CompleteTransition(2, closedIdentity.Handle);
+            Assert.Equal(Visibility.Hidden, dead.ClickBorder.Visibility);
+            Assert.Equal(Visibility.Hidden, dead.HighlightBorder.Visibility);
+            Assert.Equal(Visibility.Hidden, dead.TitleLabel.Visibility);
+            Assert.False(dead.CloseButton!.IsEnabled);
+            Assert.False(dead.MatchesTitle(""));
+            Assert.Equal(Visibility.Visible, pending.ClickBorder.Visibility);
+            Assert.Equal(Visibility.Visible, pending.HighlightBorder.Visibility);
+        });
+
+    [Theory]
+    [InlineData(unchecked((int)0x80070057), true)]
+    [InlineData(unchecked((int)0x80004005), false)]
+    public void ConfirmedCloseHandlesOnlyAnAlreadyAbsentDwmRelationAsReleased(int result, bool absent)
+        => RunSta(() =>
+        {
+            var identity = new WindowActivationTarget(new(42), 1, 2);
+            var thumb = new WindowThumb
+            {
+                WindowHandle = identity.Handle, Identity = identity, ThumbnailHandle = new(701),
+                ClickBorder = new OverviewThumbnail("Synthetic document"),
+                HighlightBorder = new Border(), TitleLabel = new TextBlock()
+            };
+            var manager = new ThumbnailManager(new Canvas(), [thumb], IntPtr.Zero, _ => { }, _ => { });
+            if (absent)
+            {
+                manager.HideClosedSources([identity], _ => true, _ => result);
+                Assert.Equal(IntPtr.Zero, thumb.ThumbnailHandle);
+            }
+            else
+            {
+                var error = Assert.Throws<InvalidOperationException>(() =>
+                    manager.HideClosedSources([identity], _ => true, _ => result));
+                Assert.Contains("DWM", error.Message);
+                Assert.Equal(new IntPtr(701), thumb.ThumbnailHandle);
+            }
+            Assert.Equal(Visibility.Hidden, thumb.HighlightBorder.Visibility);
+        });
+
     [Fact]
     public void FilteringShelfRevokesQueuedCloseAndRestoresTheSamePeerWhenCleared()
         => RunSta(() =>

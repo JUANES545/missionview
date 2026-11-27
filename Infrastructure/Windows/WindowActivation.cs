@@ -89,6 +89,12 @@ namespace WindowScatter
             IntPtr host, IntPtr chrome, Action hide)
             => CloseOverviewAndActivate(target, restore, wasMaximized, new HashSet<IntPtr> { host, chrome }, hide);
 
+        internal bool CloseOverviewForPendingClose(WindowActivationTarget target, WindowActivationTarget original,
+            bool explicitReturn, IReadOnlySet<IntPtr> surfaces, Action hide, Func<bool> stillValid)
+            // A closing source may minimize itself; only Escape or an owned prompt needs restoration.
+            => CloseOverviewAndActivate(target, restore: explicitReturn || target != original, wasMaximized: false,
+                surfaces, hide, stillValid);
+
         public bool CloseOverviewAndActivate(WindowActivationTarget target, bool restore, bool wasMaximized,
             IReadOnlySet<IntPtr> surfaces, Action hide, Func<bool>? stillValid = null)
         {

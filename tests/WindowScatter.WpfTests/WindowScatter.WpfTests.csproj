@@ -18,9 +18,11 @@
     <Compile Include="../../Core/**/*.cs" Link="Core/%(RecursiveDir)%(Filename)%(Extension)" />
     <Compile Include="../../Application/**/*.cs" Link="Application/%(RecursiveDir)%(Filename)%(Extension)" />
     <Compile Include="../../Presentation/Wpf/Settings/SettingsWindow.cs" Link="SettingsWindow.cs" />
+    <Compile Include="../../Presentation/Wpf/Settings/SettingsWindow.Search.cs" Link="SettingsWindow.Search.cs" />
     <Compile Include="../../Infrastructure/Preferences/JsonSettingsStore.cs" Link="JsonSettingsStore.cs" />
     <Compile Include="../../Presentation/Wpf/Updates/UpdatePanel.cs" Link="UpdatePanel.cs" />
     <Compile Include="../../Infrastructure/Updates/UpdateService.cs" Link="UpdateService.cs" />
+    <Compile Include="../../Infrastructure/Windows/UpdateInstaller.cs" Link="UpdateInstaller.cs" />
     <EmbeddedResource Include="../../Presentation/Wpf/Overview/MainWindow.xaml" LogicalName="MainWindow.xaml" />
     <EmbeddedResource Include="../../assets/branding/MissionView.ico" LogicalName="MissionView.TrayIcon.ico" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />

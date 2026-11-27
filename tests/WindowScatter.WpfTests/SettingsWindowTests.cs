@@ -55,8 +55,8 @@ public sealed class SettingsWindowTests
                 Assert.Null(UIElementAutomationPeer.CreatePeerForElement(Descendants(window).OfType<Image>().Single()));
                 var controls = Descendants(window).OfType<Control>().ToArray();
                 Assert.Equal(4, controls.OfType<ComboBox>().Count());
-                Assert.Equal(new[] { "Selection border", "Overview displays", "Thumbnail size", "Background dimming", "Reset settings",
-                    "Overview shortcut: Win+F12", "Use Alt+Tab", "App Exposé shortcut: Win+Shift+F12", "Corner", "Delay (milliseconds)" },
+                Assert.Equal(new[] { "Search settings", "Selection border", "Overview displays", "Thumbnail size", "Background dimming", "Reset settings",
+                    "Overview shortcut: Win+F12", "Use Alt+Tab", "App Exposé shortcut: Win+Shift+F12", "Corner", "Delay (milliseconds)", "Matching settings" },
                     controls.Where(c => !string.IsNullOrEmpty(AutomationProperties.GetName(c)) &&
                         !AutomationProperties.GetAutomationId(c).EndsWith(" help")).Select(AutomationProperties.GetName));
                 Assert.Equal("Win+F12", Button(window, "Win+F12").Content);

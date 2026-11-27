@@ -12,11 +12,13 @@ namespace WindowScatter
         public double AnimationSpeed { get; set; } = 0.25;
         public string SelectionBorderColor { get; set; } = "White";
         public string OverviewMonitorScope { get; set; } = "All";
+        public bool EnableVirtualDesktopStrip { get; set; }
         public bool ShowMinimizedWindows { get; set; } = true;
         public bool ShowMinimizedWindowsInOverview { get; set; } = true;
         public string ThumbnailSize { get; set; } = "Standard";
         public double BackgroundDimming { get; set; } = 160d / 255 * 100;
         public bool ReduceAnimations { get; set; }
+        public bool InstallUpdatesAutomatically { get; set; }
 
         /// <summary>Launch automatically at logon (HKCU Run key). Applied on startup.</summary>
         public bool RunOnStartup { get; set; } = false;
@@ -57,11 +59,13 @@ namespace WindowScatter
             AnimationSpeed = source.AnimationSpeed;
             SelectionBorderColor = source.SelectionBorderColor;
             OverviewMonitorScope = source.OverviewMonitorScope;
+            EnableVirtualDesktopStrip = source.EnableVirtualDesktopStrip;
             ShowMinimizedWindows = source.ShowMinimizedWindows;
             ShowMinimizedWindowsInOverview = source.ShowMinimizedWindowsInOverview;
             ThumbnailSize = source.ThumbnailSize;
             BackgroundDimming = source.BackgroundDimming;
             ReduceAnimations = source.ReduceAnimations;
+            InstallUpdatesAutomatically = source.InstallUpdatesAutomatically;
             RunOnStartup = source.RunOnStartup;
             Renderer = source.Renderer;
         }

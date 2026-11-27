@@ -11,6 +11,24 @@ namespace WindowScatter
         private void Window_KeyDown(object sender, KeyEventArgs e)
         {
             if (Keyboard.FocusedElement is MenuItem) return;
+            if (e.Key == Key.F6 && Keyboard.Modifiers == ModifierKeys.None && !coordinator.drag.IsPressed &&
+                !composingSearchText && CanChangeDesktop &&
+                virtualDesktopButtons.Children.OfType<Button>().FirstOrDefault(b => b.IsEnabled) is { } desktop)
+            {
+                desktop.Focus();
+                e.Handled = true;
+                return;
+            }
+            if (virtualDesktopButtons.IsKeyboardFocusWithin &&
+                e.Key is Key.Return or Key.Space or Key.Tab or Key.Left or Key.Right)
+            {
+                if (e.Key is Key.Left or Key.Right && Keyboard.FocusedElement is UIElement element)
+                {
+                    element.MoveFocus(new TraversalRequest(e.Key == Key.Left ? FocusNavigationDirection.Previous : FocusNavigationDirection.Next));
+                    e.Handled = true;
+                }
+                return;
+            }
             if (Keyboard.FocusedElement is OverviewCloseButton && e.Key is Key.Return or Key.Space) return;
             bool escape = e.Key == Key.Escape || (e.Key == Key.System && e.SystemKey == Key.Escape);
             if (coordinator.drag.IsPressed)
@@ -32,7 +50,7 @@ namespace WindowScatter
                 if (OverviewMoveShortcut.Matches(e.Key, e.SystemKey, Keyboard.Modifiers))
                 {
                     bool moveKey = (e.Key == Key.System ? e.SystemKey : e.Key) == Key.M;
-                    if (!moveKey || views.Count > 1) coordinator.ShowMoveMenu();
+                    if (!moveKey || views.Count > 1 || CanChangeDesktop) coordinator.ShowMoveMenu();
                     e.Handled = true;
                     return;
                 }
@@ -66,6 +84,7 @@ namespace WindowScatter
 
         private void Window_KeyUp(object sender, KeyEventArgs e)
         {
+            if (virtualDesktopButtons.IsKeyboardFocusWithin && e.Key == Key.Space) return;
             if (Keyboard.FocusedElement is OverviewCloseButton && e.Key == Key.Space) return;
             if (e.Key != Key.Space) return;
             if (!previewKey.IsHeld && (IsSearching || composingSearchText)) return;

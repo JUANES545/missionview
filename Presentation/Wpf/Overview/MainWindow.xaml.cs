@@ -109,6 +109,7 @@ namespace WindowScatter
             previewKey = session.PreviewKey;
             InitializeComponent();
             ConfigureSearchInput();
+            ConfigureVirtualDesktopStrip();
             AccessKeyManager.Register("S", DesktopButton);
             RenderCanvas.Children.Remove(ChromeCanvas);
             chromeWindow = new OverviewChromeWindow(this, ChromeCanvas);
@@ -192,6 +193,7 @@ namespace WindowScatter
         {
             InitializeRendering();
             if (!scatterInteraction.IsOpen) this.Visibility = Visibility.Hidden;
+            if (IsCoordinator) ApplyAutomaticUpdatesPreference();
         }
 
         private void InitializeRendering()
@@ -219,13 +221,17 @@ namespace WindowScatter
             {
                 try
                 {
-                    if (scatterInteraction.IsOpen && !isTransitioning && !coordinator.drag.IsPressed)
+                    if (scatterInteraction.IsOpen && !isTransitioning && !coordinator.drag.IsPressed && !AnyAnimating)
                     {
-                        thumbnailManager.CompleteTransition(currentDpiScale, selectedWindowHandle);
-                        if (minimizedStrip != null)
+                        foreach (var view in views)
                         {
-                            minimizedStrip.Visibility = Visibility.Visible;
-                            minimizedStrip.SetSelected(selectedWindowHandle);
+                            view.thumbnailManager.CompleteTransition(view.currentDpiScale, selectedWindowHandle);
+                            if (view.minimizedStrip != null)
+                            {
+                                view.minimizedStrip.SetSelectionOutlinesVisible(true);
+                                view.minimizedStrip.Visibility = Visibility.Visible;
+                                view.minimizedStrip.SetSelected(selectedWindowHandle);
+                            }
                         }
                     }
                 }
@@ -455,6 +461,7 @@ namespace WindowScatter
                 return;
             }
             settingsWindow?.Close();
+            automaticUpdateTimer?.Stop();
             updateController?.Dispose();
             trayIcon?.ContextMenuStrip?.Dispose();
             try { trayIcon?.Dispose(); } catch { }
@@ -656,7 +663,16 @@ namespace WindowScatter
                     CancelSessionImmediately();
                     return;
                 }
-                foreach (var view in views) view.ShowView();
+                if (settings.EnableVirtualDesktopStrip && !openingWithFileDrag && request is null)
+                {
+                    await services.Desktops.OpenAsync();
+                    if (isClosing || !scatterInteraction.IsOpen || generation != scatterInteraction.Generation) return;
+                }
+                foreach (var view in views)
+                {
+                    view.ShowView();
+                    view.RenderVirtualDesktopStrip();
+                }
                 activeView = this;
                 SelectWindow(fileDrag != null ? IntPtr.Zero :
                     OverviewPreview.InitialSelection(previousWindow, AllThumbs().Select(t => t.WindowHandle)));

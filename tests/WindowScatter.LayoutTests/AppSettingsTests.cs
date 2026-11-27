@@ -5,6 +5,25 @@ using Xunit;
 public sealed class AppSettingsTests : IDisposable
 {
     [Fact]
+    public void BackgroundUpdatesDefaultOffAndUseTransactionalPersistence()
+    {
+        Assert.False(new AppSettings().InstallUpdatesAutomatically);
+        Put(Legacy, Profile);
+        var settings = Store.Load();
+        Assert.False(settings.InstallUpdatesAutomatically);
+
+        var candidate = settings.Copy();
+        candidate.InstallUpdatesAutomatically = true;
+        var preferences = new PreferencesService(settings, Store.Save);
+        Assert.False(preferences.TryApply(candidate, () => throw new IOException("Synthetic apply failure"),
+            () => { }, error => Assert.IsType<IOException>(error)));
+        Assert.False(settings.InstallUpdatesAutomatically);
+        Assert.False(Store.Load().InstallUpdatesAutomatically);
+        Assert.True(preferences.TryApply(candidate, () => { }, () => { }, error => throw error));
+        Assert.True(Store.Load().InstallUpdatesAutomatically);
+    }
+
+    [Fact]
     public void GeneralOverviewMinimizedDefaultsOnAndAnExplicitFalsePersistsIndependently()
     {
         Assert.True(new AppSettings().ShowMinimizedWindowsInOverview);

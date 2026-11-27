@@ -66,6 +66,8 @@ namespace WindowScatter
 
         private void HideAllViews()
         {
+            services.Desktops.Close();
+            foreach (var view in views) view.RenderVirtualDesktopStrip();
             HideSearchForTransition();
             StopCloseObservation();
             CloseMoveMenus();
@@ -203,10 +205,13 @@ namespace WindowScatter
                 try
                 {
                     var cursor = ReadPointer();
+                    var desktop = coordinator.drag.IsDragging ? coordinator.VirtualDesktopAt(cursor) : default;
                     var result = coordinator.FinishDrag(cursor);
                     if (result.Dragged)
                     {
-                        if (!ReferenceEquals(result.Destination, result.Source))
+                        if (desktop.Target is { } target)
+                            await coordinator.ChangeVirtualDesktopAsync(target, result.Target);
+                        else if (!desktop.OverStrip && !ReferenceEquals(result.Destination, result.Source))
                             await coordinator.MoveWindowAsync(result.Target, result.Source, result.Destination!);
                     }
                     else OnWindowClicked(result.Target.Handle);
@@ -284,6 +289,7 @@ namespace WindowScatter
                 };
                 menu.Items.Add(item);
             }
+            AddVirtualDesktopMoveMenu(menu, thumb);
             if (menu.Items.Count > 0) menu.Items.Add(new Separator());
             menu.Items.Add(closeItem);
             return menu;

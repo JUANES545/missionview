@@ -32,6 +32,8 @@ Once the overview settles, middle-click a preview or click its circular **X** to
 
 Ordinary successful closes keep you in the overview. MissionView keeps the preview until Windows no longer identifies the original window. It leaves the overview for a visible, enabled owned prompt when its owner is disabled, or when the last requested window or one of its owned windows takes focus. It checks window identity and ownership before handing off; it does not treat other windows from the same process as prompts.
 
+The selection outline disappears when Windows accepts a close request, while the application decides whether to close. If the application keeps the window open, selecting another preview and returning restores the outline. The outline stays hidden during overview transitions and appears at the final position after all displays settle. Unchanged previews keep their existing live thumbnails after an ordinary close.
+
 Custom or in-window prompts may not be identifiable. Press `Escape` to check the last window you requested closed, rather than the window you were using before opening the overview, if it still matches its captured identity. MissionView restores that window only if needed and respects another application's foreground focus. It sends one close request per window in an overview session; reopening the overview lets you make a new request. It does not dismiss save prompts or force an application to quit.
 
 Use the desktop button or `Alt+S` in the overview to show or restore the desktop. You can also use the tray menu.
@@ -67,6 +69,8 @@ For a supported overview shortcut that includes `Win`, MissionView masks the Win
 ## Make it yours
 
 Right-click the tray icon to open **Settings**. Select an info button for inline help. Choose startup, shortcuts, hot corners, thumbnail size, background dimming and a White, Blue or Mint selection border (White by default). Show the overview on all displays or only the display under the pointer; moving between displays requires all displays. **Show minimized windows in Overview** is on by default and independent of the App Exposé shelf. The shelf lists minimized windows by title and icon, without a live preview; select one to restore it. Completed changes apply as you make them. Press `Enter` to apply a new hot-corner delay. **Reset settings** asks before restoring defaults. Check for updates from Settings or the tray; MissionView asks before starting the installer.
+
+On an installed copy, enable **Install updates automatically** in **Settings → Updates** to download and verify updates in the background. The option starts off and does not appear in the portable app. When an update is ready, select **Restart to update**, confirm, and follow Setup. MissionView checks the download's integrity, not its publisher signature. Setup versions that offer **Reopen MissionView** can reopen the app after a successful install; otherwise, open MissionView from Start after Setup finishes.
 
 ## Contribute
 
