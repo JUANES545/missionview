@@ -22,7 +22,9 @@ With the search empty, hold `Space` to enlarge a live preview. Keep holding it w
 
 Overlapping previews stay together near their original positions when a compact group fits, without moving independent previews. Otherwise, MissionView keeps its individual-placement and grid fallbacks.
 
-Closing or adding a window keeps unchanged previews in their last positions when a local placement fits. Reopening the same overview uses that layout too. Moving or resizing a real window reanchors its preview; changing displays, DPI, thumbnail size, overview scope or application discards the incompatible layout. Positions stay in memory only, without saving window titles or screenshots.
+While the overview is open, eligible windows appear or disappear as they open, close, or change visibility. Updates respect the current search, App Exposé, display scope, and minimized-window settings. New live previews fade in briefly unless animations are reduced. They do not take focus, and changes wait for an active drag or transition to finish.
+
+Closing or adding a window keeps surviving live previews in their last positions when they still fit. A lone maximized window returns to the center of its display. Reopening the same overview uses that layout too. Moving or resizing a real window reanchors its preview; changing display configuration, DPI, thumbnail size, overview scope or application discards the incompatible layout. Positions stay in memory only, without saving window titles or screenshots.
 
 Point at an application and press `Win+Shift+W` to see its windows with App Exposé. Browse its minimized windows in the bottom shelf; they stay minimized until you choose one.
 
@@ -30,7 +32,7 @@ Drag a window preview to another display and release to move it. Press `Escape` 
 
 Once the overview settles, middle-click a preview or click its circular **X** to request normal window closure. The X appears at the top-left when you point at or select a preview, including displayed minimized windows in App Exposé. Select a window and open its menu with `Shift+F10` or the Menu key to choose **Close window** without a mouse.
 
-Ordinary successful closes keep you in the overview. MissionView keeps the preview until Windows no longer identifies the original window. It leaves the overview for a visible, enabled owned prompt when its owner is disabled, or when the last requested window or one of its owned windows takes focus. It checks window identity and ownership before handing off; it does not treat other windows from the same process as prompts.
+Ordinary successful closes keep you in the overview. A close request alone does not remove a preview. MissionView leaves the overview for a visible, enabled owned prompt when its owner is disabled, or when one of its owned windows takes focus. The requested window taking focus alone does not dismiss the overview. It checks window identity and ownership before handing off; it does not treat other windows from the same process as prompts.
 
 The selection outline disappears when Windows accepts a close request, while the application decides whether to close. If the application keeps the window open, selecting another preview and returning restores the outline. The outline stays hidden during overview transitions and appears at the final position after all displays settle. Unchanged previews keep their existing live thumbnails after an ordinary close.
 

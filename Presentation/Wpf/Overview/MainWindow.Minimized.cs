@@ -7,6 +7,7 @@ namespace WindowScatter
     public partial class MainWindow
     {
         private MinimizedWindowStrip? minimizedStrip;
+        private List<WindowInfo> overviewSources = [];
         private IEnumerable<WindowThumb> ViewThumbs => windowThumbs.Concat(minimizedStrip?.Thumbs ?? []);
         private double OverviewContentHeight => monitorPixelHeight - (minimizedStrip?.Geometry.ReservedHeight ?? 0) * currentDpiScale;
         private bool IncludeMinimizedWindows => coordinator.showMinimizedWindows;
@@ -16,48 +17,37 @@ namespace WindowScatter
             DwmGetWindowAttributeInt(handle, DWMWA_CLOAKED, out int cloaked, sizeof(int)) >= 0 &&
             cloaked == 0 && CurrentVirtualDesktop.Contains(handle);
 
-        private void RebuildThumbnails(IReadOnlyList<IntPtr> sourceOrder, List<WindowInfo> windows, bool settled)
+        private void RebuildThumbnails(IReadOnlyList<IntPtr> sourceOrder, List<WindowInfo> windows, bool settled,
+            bool retainExisting = false)
         {
             windows = windows.Where(w => IncludeMinimizedWindows || !w.WasMinimized).ToList();
             InvalidateNavigation();
             animationManager.StopAllAnimations();
-            thumbnailManager.CleanupAllThumbnails();
+            if (!retainExisting) thumbnailManager.CleanupAllThumbnails();
             enumeratedWindowCount = windows.Count;
-            RebuildMinimizedStrip(windows, settled);
-            RefreshOverviewPresentation(SystemParameters.HighContrast, SystemParameters.ClientAreaAnimation);
+            var minimized = windows.Where(w => w.WasMinimized).ToList();
+            if (!retainExisting || (minimizedStrip == null ? minimized.Count != 0 : !minimizedStrip.CanKeepWindows(minimized)))
+                RebuildMinimizedStrip(minimized, settled);
+            if (!retainExisting) RefreshOverviewPresentation(SystemParameters.HighContrast, SystemParameters.ClientAreaAnimation);
             var layouts = LayoutCalculatorForDisplay().CalculateLayouts(windows.Where(w => !w.WasMinimized).ToList(),
                 monitor.Width, OverviewContentHeight, currentDpiScale, settings.ThumbnailSize);
             thumbnailManager.SourceOrder = sourceOrder;
             string foldedQuery = OverviewTitleSearch.Fold(coordinator.searchQuery);
-            thumbnailManager.RegisterThumbnails(layouts, animationManager, currentDpiScale, settled, foldedQuery);
+            thumbnailManager.RegisterThumbnails(layouts, animationManager, currentDpiScale, settled, foldedQuery,
+                retainExisting);
             minimizedStrip?.ApplyTitleFilter(foldedQuery);
             LayoutCalculatorForDisplay().KeepRegisteredIdentities(windowThumbs.Select(t => t.Identity));
             windowSwitcher = new WindowSwitcher(thumbnailManager, animationManager, windowThumbs, layouts);
-            if (coordinator.selectedWindowHandle != IntPtr.Zero && coordinator.ViewFor(coordinator.selectedWindowHandle) == null)
+            if (!retainExisting && coordinator.selectedWindowHandle != IntPtr.Zero && coordinator.ViewFor(coordinator.selectedWindowHandle) == null)
                 coordinator.SelectWindow(IntPtr.Zero);
             ChromeCanvas.Visibility = Visibility.Visible;
+            overviewSources = windows;
             RefreshEmptyOverview(windows.Count);
             MoveStatus.Text = IdleMoveStatus;
             if (!settled) return;
             thumbnailManager.CompleteTransition(currentDpiScale, selectedWindowHandle);
             minimizedStrip?.SetSelectionOutlinesVisible(true);
             animationManager.StartKeepAlive();
-        }
-
-        private bool TryKeepThumbnailsAfterClose(IReadOnlyList<IntPtr> sourceOrder, List<WindowInfo> windows)
-        {
-            windows = windows.Where(w => IncludeMinimizedWindows || !w.WasMinimized).ToList();
-            var minimized = windows.Where(w => w.WasMinimized).ToList();
-            if (currentDpiScale != monitor.DpiScale || monitorPixelWidth != monitor.Width || monitorPixelHeight != monitor.Height ||
-                (minimizedStrip == null ? minimized.Count != 0 : !minimizedStrip.CanKeepWindowsAfterClose(minimized)) ||
-                !thumbnailManager.TryKeepLayoutAfterClose(windows.Where(w => !w.WasMinimized).ToList(), sourceOrder)) return false;
-            enumeratedWindowCount = windows.Count;
-            InvalidateNavigation();
-            LayoutCalculatorForDisplay().KeepRegisteredIdentities(windowThumbs.Select(t => t.Identity));
-            RefreshEmptyOverview(windows.Count);
-            MoveStatus.Text = IdleMoveStatus;
-            animationManager.StartKeepAlive();
-            return true;
         }
 
         private void RefreshEmptyOverview(int windowCount)
@@ -70,11 +60,9 @@ namespace WindowScatter
             EmptyMessage.Visibility = !ViewThumbs.Any() ? Visibility.Visible : Visibility.Hidden;
         }
 
-        private void RebuildMinimizedStrip(List<WindowInfo> windows, bool settled)
+        private void RebuildMinimizedStrip(List<WindowInfo> minimized, bool settled)
         {
             CleanupMinimizedStrip();
-            if (!IncludeMinimizedWindows) return;
-            var minimized = windows.Where(w => w.WasMinimized).ToList();
             if (minimized.Count == 0) return;
             minimizedStrip = new MinimizedWindowStrip(minimized, monitor.Width / currentDpiScale,
                 monitor.Height / currentDpiScale, currentDpiScale, OnMinimizedClicked, OnWindowHovered,

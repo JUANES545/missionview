@@ -120,7 +120,7 @@ public partial class MainWindow
         }
     }
 
-    private void RefreshSearchResults(IntPtr preferredSelection = default)
+    private void RefreshSearchResults(IntPtr preferredSelection = default, bool keyboardSelection = true)
     {
         string folded = OverviewTitleSearch.Fold(searchQuery);
         foreach (var view in views)
@@ -135,7 +135,7 @@ public partial class MainWindow
             (preferredSelection == IntPtr.Zero ? selectedWindowHandle : preferredSelection)) ?? matches.FirstOrDefault();
         var handle = selected?.WindowHandle ?? IntPtr.Zero;
         bool changed = handle != selectedWindowHandle;
-        SelectWindow(handle, keyboard: changed, revealMinimized: changed);
+        SelectWindow(handle, keyboard: changed && keyboardSelection, revealMinimized: changed);
 
         string status = !IsSearching ? "" : matches.Length switch
         {

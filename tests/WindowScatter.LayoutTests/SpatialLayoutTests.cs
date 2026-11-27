@@ -147,6 +147,29 @@ public class SpatialLayoutTests(ITestOutputHelper output)
         AssertSafe(layouts, 5120, 1440, 1);
     }
 
+    [Theory]
+    [InlineData(800, 600, false)]
+    [InlineData(1600, 900, true)]
+    [InlineData(1920, 1040, true)]
+    public void MaximizedSurvivorRecentersAfterExplorerClosesAndWhenOverviewReopens(
+        int explorerWidth, int explorerHeight, bool displacesSurvivor)
+    {
+        var calculator = new WindowLayoutCalculator();
+        var maximized = IdentifiedWin(1, 0, 0, 1920, 1040);
+        maximized.WasMaximized = true;
+        var explorer = IdentifiedWin(2, 0, 0, explorerWidth, explorerHeight);
+        var initial = Assert.Single(calculator.CalculateLayouts([maximized], 1920, 1080));
+        Assert.Equal((480d, 260d, 960d, 520d), Geometry(initial));
+        var pair = calculator.CalculateLayouts([explorer, maximized], 1920, 1080);
+        var survivor = pair.Single(l => l.Window == maximized);
+        Assert.Equal(displacesSurvivor, Geometry(initial) != Geometry(survivor));
+        if (explorerWidth == 1920) Assert.True(survivor.Width < initial.Width);
+        AssertSafe(pair, 1920, 1080, 1);
+        Assert.Equal(Geometry(initial), Geometry(Assert.Single(calculator.CalculateLayouts([maximized], 1920, 1080))));
+        calculator.KeepRegisteredIdentities([maximized.Identity]);
+        Assert.Equal(Geometry(initial), Geometry(Assert.Single(calculator.CalculateLayouts([maximized], 1920, 1080))));
+    }
+
     [Fact]
     public void ClosingOpeningAndAddingWindowsRetainsUnchangedVerifiedPositions()
     {

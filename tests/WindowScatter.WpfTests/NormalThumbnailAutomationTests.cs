@@ -82,10 +82,10 @@ public class NormalThumbnailAutomationTests
             var window = new WindowInfo { Handle = identity.Handle, Identity = identity, Title = "Synthetic document", WasMinimized = true };
             var strip = new MinimizedWindowStrip([window], 900, 700, 1, _ => { }, _ => { }, _ => null);
             var thumb = Assert.Single(strip.Thumbs);
-            Assert.True(strip.CanKeepWindowsAfterClose([window]));
+            Assert.True(strip.CanKeepWindows([window]));
             window.Identity = new(identity.Handle, 9, 2);
-            Assert.False(strip.CanKeepWindowsAfterClose([window]));
-            Assert.False(strip.CanKeepWindowsAfterClose([]));
+            Assert.False(strip.CanKeepWindows([window]));
+            Assert.False(strip.CanKeepWindows([]));
             Assert.Same(thumb, Assert.Single(strip.Thumbs));
         });
 
@@ -145,56 +145,53 @@ public class NormalThumbnailAutomationTests
             Assert.Equal(1, thumb.HighlightBorder.Opacity);
         });
 
-    [Theory]
-    [InlineData("unchanged", true)]
-    [InlineData("moved", false)]
-    [InlineData("resized", false)]
-    [InlineData("reused", false)]
-    [InlineData("added", false)]
-    [InlineData("metadata", false)]
-    [InlineData("unsettled", false)]
-    [InlineData("unregistered", false)]
-    public void CloseRefreshKeepsOnlyUnchangedSettledSourceRegistrations(string change, bool retained)
+    [Fact]
+    public void LiveRefreshRegistersOnlyTheNewSourceAndKeepsTheSurvivorsSlotAndSearchLabels()
         => RunSta(() =>
         {
             var identity = new WindowActivationTarget(new(42), 1, 2);
             var thumb = new WindowThumb
             {
                 WindowHandle = identity.Handle, Identity = identity, Title = "Synthetic document", ThumbnailHandle = new(701),
+                ClickBorder = new OverviewThumbnail("Synthetic document"), TitleLabel = new TextBlock(), HighlightBorder = new Border(),
                 StartX = 100, StartY = 200, StartWidth = 1000, StartHeight = 800,
                 CurrentX = 50, CurrentY = 60, CurrentWidth = 500, CurrentHeight = 400,
                 TargetX = 50, TargetY = 60, TargetWidth = 500, TargetHeight = 400
             };
-            var windows = new List<WindowInfo> { new()
+            OverviewCloseInput.Attach(thumb, thumb.Title, () => true, () => { });
+            Assert.True(thumb.MatchesTitle("synthetic"));
+            var survivor = new WindowInfo
             {
-                Handle = identity.Handle, Identity = identity, Title = thumb.Title,
-                OriginalRect = new() { Left = 100, Top = 200, Right = 1100, Bottom = 1000 }
-            } };
-            switch (change)
-            {
-                case "moved": windows[0].OriginalRect.Left++; windows[0].OriginalRect.Right++; break;
-                case "resized": windows[0].OriginalRect.Right++; break;
-                case "reused": windows[0].Identity = new(identity.Handle, 9, 2); break;
-                case "added": windows.Add(new() { Handle = new(43), Identity = new(new(43), 1, 2) }); break;
-                case "metadata": windows[0].Title = "Changed title"; break;
-                case "unsettled": thumb.CurrentX++; break;
-                case "unregistered": thumb.ThumbnailHandle = IntPtr.Zero; break;
-            }
+                Handle = identity.Handle, Identity = identity, Title = "Updated document",
+                OriginalRect = new() { Left = 120, Top = 200, Right = 1120, Bottom = 1000 }
+            };
+            var added = new WindowInfo { Handle = new(43), Identity = new(new(43), 1, 2), Title = "New window" };
             var thumbs = new List<WindowThumb> { thumb };
+            var registrations = new List<IntPtr>();
             var manager = new ThumbnailManager(new Canvas(), thumbs, IntPtr.Zero, _ => { }, _ => { },
-                register: _ => throw new Exception("Retaining an unchanged source must not register a new thumbnail."));
-            IntPtr[] order = [identity.Handle];
-            Assert.Equal(retained, manager.TryKeepLayoutAfterClose(windows, order));
+                register: handle => { registrations.Add(handle); return (-1, IntPtr.Zero); });
+            manager.RegisterThumbnails([
+                new() { Window = survivor, X = 50, Y = 60, Width = 500, Height = 400 },
+                new() { Window = added, X = 600, Y = 60, Width = 200, Height = 400 }
+            ], new WindowAnimationManager(thumbs), settled: true, foldedQuery: "updated", retainExisting: true);
+
+            Assert.Equal(added.Handle, Assert.Single(registrations));
             Assert.Same(thumb, Assert.Single(thumbs));
-            Assert.Equal(change == "unregistered" ? IntPtr.Zero : new IntPtr(701), thumb.ThumbnailHandle);
-            Assert.Equal((50d, 60d, 500d, 400d), (thumb.TargetX, thumb.TargetY, thumb.TargetWidth, thumb.TargetHeight));
-            Assert.Equal(retained, ReferenceEquals(order, manager.SourceOrder));
+            Assert.Equal(new IntPtr(701), thumb.ThumbnailHandle);
+            Assert.Equal((50d, 60d, 500d, 400d), (thumb.CurrentX, thumb.CurrentY, thumb.CurrentWidth, thumb.CurrentHeight));
+            Assert.Equal(120d, thumb.StartX);
+            Assert.False(thumb.MatchesTitle("synthetic"));
+            Assert.Equal(survivor.Title, AutomationProperties.GetName(thumb.ClickBorder));
+            Assert.Equal("Close Updated document", AutomationProperties.GetName(thumb.CloseButton!));
+            Assert.Equal(Visibility.Visible, thumb.ClickBorder.Visibility);
         });
 
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public void ConfirmedCloseRetiresOnlyDeadSourceBeforeRebuildAndCannotBeRevealedAgain(bool reusedHandle)
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public void RequestedOrExternalCloseRetiresOnlyDeadSourceBeforeLayout(bool reusedHandle, bool requested)
         => RunSta(() =>
         {
             var closedIdentity = new WindowActivationTarget(new(42), 1, 2);
@@ -221,7 +218,7 @@ public class NormalThumbnailAutomationTests
             int Release(IntPtr thumbnail) { released.Add(thumbnail); return 0; }
             var thumbs = new List<WindowThumb> { dead, pending };
             var manager = new ThumbnailManager(new Canvas(), thumbs, IntPtr.Zero, _ => { }, _ => { });
-            close.Request(closedIdentity);
+            if (requested) close.Request(closedIdentity);
             close.Request(pendingIdentity);
             manager.SetSelectedWindow(closedIdentity.Handle);
             manager.HideClosedSources([closedIdentity, pendingIdentity], close.IsClosed, Release);
@@ -229,7 +226,10 @@ public class NormalThumbnailAutomationTests
             Assert.Equal(Visibility.Visible, dead.HighlightBorder.Visibility);
             if (reusedHandle) identities[closedIdentity.Handle] = new(closedIdentity.Handle, 9, 2);
             else identities.Remove(closedIdentity.Handle);
-            var closed = close.ConfirmClosed();
+            var confirmed = close.ConfirmClosed();
+            if (requested) Assert.Equal(closedIdentity, Assert.Single(confirmed));
+            else Assert.Empty(confirmed);
+            var closed = thumbs.Select(t => t.Identity).Where(close.IsClosed).ToHashSet();
             Assert.Equal(closedIdentity, Assert.Single(closed));
             manager.HideClosedSources(closed, close.IsClosed, Release);
             manager.HideClosedSources(closed, close.IsClosed, Release);

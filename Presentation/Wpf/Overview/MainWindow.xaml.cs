@@ -439,7 +439,7 @@ namespace WindowScatter
 
         protected override void OnClosed(EventArgs e)
         {
-            if (IsCoordinator) StopCloseObservation();
+            if (IsCoordinator) StopWindowObservation();
             AccessKeyManager.Unregister("S", DesktopButton);
             SystemParameters.StaticPropertyChanged -= OnSystemParametersChanged;
             if (IsCoordinator)
@@ -685,6 +685,7 @@ namespace WindowScatter
                 ApplyWorkingSetFloor();
                 foreach (var view in views)
                     view.thumbnailManager.BeginTransition(view.animationManager.StartScatterAnimation);
+                StartWindowObservation();
             }
             catch (Exception ex)
             {

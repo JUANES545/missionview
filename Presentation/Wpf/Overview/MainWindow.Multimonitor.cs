@@ -69,7 +69,7 @@ namespace WindowScatter
             services.Desktops.Close();
             foreach (var view in views) view.RenderVirtualDesktopStrip();
             HideSearchForTransition();
-            StopCloseObservation();
+            StopWindowObservation();
             CloseMoveMenus();
             foreach (var view in views.ToArray())
             {
@@ -81,6 +81,7 @@ namespace WindowScatter
 
         private void CleanupView()
         {
+            overviewSources.Clear();
             InvalidateNavigation();
             RefreshSearchPresentation();
             SearchBox.Text = "";

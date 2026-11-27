@@ -11,6 +11,8 @@ namespace WindowScatter
         // Apple's Mission Control default expose duration is 0.25s; power users
         // drop it to ~0.1s. 0.20s reads as instant yet still trackable.
         private const double ANIMATION_DURATION = 0.20;
+        private const double LiveEntryDurationMilliseconds = 120;
+        private const long LiveEntryAwaitingFrame = -1;
 
         private readonly List<WindowThumb> windowThumbs;
         private readonly Dispatcher uiDispatcher;
@@ -56,6 +58,36 @@ namespace WindowScatter
         public bool IsAnimating => animRunning && geometryFrames == null;
         public bool IsPreviewAnimating => geometryFrames != null;
         public void SetMotionEnabled(bool enabled) => motionEnabled = enabled;
+
+        internal void BeginLiveEntry(WindowThumb thumb)
+        {
+            if (motionEnabled) thumb.LiveEntryStartedAt = LiveEntryAwaitingFrame;
+        }
+
+        internal byte ResolveLiveEntryOpacity(WindowThumb thumb, byte opacity, bool initializeVisibility, long timestamp)
+        {
+            long start = Volatile.Read(ref thumb.LiveEntryStartedAt);
+            if (start == 0) return opacity;
+            if (!motionEnabled)
+            {
+                Volatile.Write(ref thumb.LiveEntryStartedAt, 0);
+                return opacity;
+            }
+            if (start == LiveEntryAwaitingFrame)
+            {
+                // Registration can take several frames for a batch. It sets initial opacity, not the clock.
+                if (!initializeVisibility) Volatile.Write(ref thumb.LiveEntryStartedAt, timestamp);
+                start = timestamp;
+            }
+            double elapsed = System.Diagnostics.Stopwatch.GetElapsedTime(start, timestamp).TotalMilliseconds;
+            if (elapsed >= LiveEntryDurationMilliseconds)
+            {
+                Volatile.Write(ref thumb.LiveEntryStartedAt, 0);
+                return opacity;
+            }
+            double remaining = 1 - Math.Clamp(elapsed / LiveEntryDurationMilliseconds, 0, 1);
+            return (byte)Math.Round(opacity * (1 - 0.35 * remaining * remaining));
+        }
 
         /// <summary>
         /// Invoked on the UI thread after the scatter animation settles.
@@ -231,7 +263,8 @@ namespace WindowScatter
                 props.dwFlags |= DWM_TNP_VISIBLE;
                 props.fVisible = thumb.ClickBorder.Visibility == System.Windows.Visibility.Visible;
             }
-            props.opacity = opacity;
+            props.opacity = Volatile.Read(ref thumb.LiveEntryStartedAt) == 0 ? opacity :
+                ResolveLiveEntryOpacity(thumb, opacity, initializeVisibility, System.Diagnostics.Stopwatch.GetTimestamp());
             props.rcDestination.Left = (int)Math.Round(thumb.CurrentX);
             props.rcDestination.Top = (int)Math.Round(thumb.CurrentY);
             props.rcDestination.Right = (int)Math.Round(thumb.CurrentX + thumb.CurrentWidth);

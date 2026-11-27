@@ -11,6 +11,16 @@ namespace WindowScatter
         public bool WasMaximized;
         public bool WasMinimized;
         public WindowActivationTarget Identity;
+
+        internal static bool SameOverviewSources(IReadOnlyList<WindowInfo> previous, IReadOnlyList<WindowInfo> current)
+        {
+            if (previous.Count != current.Count) return false;
+            var sources = previous.ToDictionary(w => w.Identity);
+            return current.All(w => sources.TryGetValue(w.Identity, out var old) &&
+                old.Title == w.Title && old.ApplicationName == w.ApplicationName &&
+                old.WasMinimized == w.WasMinimized && old.WasMaximized == w.WasMaximized &&
+                (w.WasMinimized || old.OriginalRect.Equals(w.OriginalRect)));
+        }
     }
 
     // Opaque native identity: no ownership of or calls through the HWND.

@@ -8,6 +8,42 @@ using Xunit;
 public class PreviewAnimationTests
 {
     [Fact]
+    public void SlowRegistrationBatchDoesNotConsumeTheNewThumbnailFade()
+        => RunSta(() =>
+        {
+            long registration = System.Diagnostics.Stopwatch.Frequency;
+            long settled = registration * 2;
+            var thumb = Thumb();
+            var manager = new WindowAnimationManager([thumb]);
+            manager.SetMotionEnabled(true);
+            manager.BeginLiveEntry(thumb);
+            byte start = manager.ResolveLiveEntryOpacity(thumb, 255, true, registration);
+            Assert.InRange(start, 160, 175);
+            Assert.Equal(start, manager.ResolveLiveEntryOpacity(thumb, 255, false, settled));
+            Assert.InRange(manager.ResolveLiveEntryOpacity(thumb, 255, false, settled + registration * 6 / 100), 230, 245);
+            Assert.Equal((byte)255, manager.ResolveLiveEntryOpacity(thumb, 255, false, settled + registration / 5));
+            Assert.Equal((byte)72, manager.ResolveLiveEntryOpacity(thumb, 72, true, settled + registration));
+        });
+
+    [Fact]
+    public void ReducedMotionDoesNotStartLiveEntry()
+        => RunSta(() =>
+        {
+            var thumb = Thumb();
+            var manager = new WindowAnimationManager([thumb]);
+            manager.SetMotionEnabled(false);
+            manager.BeginLiveEntry(thumb);
+            Assert.Equal(0L, thumb.LiveEntryStartedAt);
+
+            manager.SetMotionEnabled(true);
+            manager.BeginLiveEntry(thumb);
+            Assert.NotEqual(0L, thumb.LiveEntryStartedAt);
+            manager.SetMotionEnabled(false);
+            Assert.Equal((byte)255, manager.ResolveLiveEntryOpacity(thumb, 255, false, 1));
+            Assert.Equal(0L, thumb.LiveEntryStartedAt);
+        });
+
+    [Fact]
     public void ScatterRemainsBusyUntilDispatcherSynchronizesControls()
         => RunSta(() =>
         {
