@@ -256,7 +256,8 @@ internal sealed partial class SettingsWindow
                 if (originalIndex >= 0)
                 {
                     // Keep the original position even when neighboring rows also match.
-                    result.Owner.Children[originalIndex] = result.Slot;
+                    result.Owner.Children.RemoveAt(originalIndex);
+                    result.Owner.Children.Insert(originalIndex, result.Slot);
                     filteredRows.Children.Insert(nextIndex, result.Row);
                 }
                 nextIndex++;
@@ -265,7 +266,9 @@ internal sealed partial class SettingsWindow
             {
                 if (result.Row.IsKeyboardFocusWithin) searchBox.Focus();
                 filteredRows.Children.Remove(result.Row);
-                result.Owner.Children[result.Owner.Children.IndexOf(result.Slot)] = result.Row;
+                int slotIndex = result.Owner.Children.IndexOf(result.Slot);
+                result.Owner.Children.RemoveAt(slotIndex);
+                result.Owner.Children.Insert(slotIndex, result.Row);
             }
         }
         if (query.Length == 0)

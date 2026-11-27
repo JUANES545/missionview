@@ -676,6 +676,7 @@ public sealed class SettingsPresentationTests
                     { RoutedEvent = UIElement.MouseLeftButtonDownEvent, Source = tab });
                 Assert.Same(tab, tabs.SelectedItem);
                 Assert.True(tab.IsKeyboardFocused);
+                window.UpdateLayout();
                 Assert.NotNull(tab.FocusVisualStyle);
                 Assert.IsType<Border>(tab.Template.FindName("TabFrame", tab));
                 var help = NamedButton(window, helpId);
@@ -1282,8 +1283,11 @@ public sealed class SettingsPresentationTests
         }
     }
 
-    private static ScrollViewer PageScroll(DependencyObject root) =>
-        Assert.Single(Visual(root).OfType<ScrollViewer>().Where(scroll => scroll.Name == "PageScroll"));
+    private static ScrollViewer PageScroll(DependencyObject root)
+    {
+        var tabs = Assert.Single(Logical(root).OfType<TabControl>());
+        return Assert.IsType<ScrollViewer>(tabs.Template.FindName("PageScroll", tabs));
+    }
 
     private static ScrollViewer FilteredSettings(DependencyObject root) =>
         Assert.Single(Logical(root).OfType<ScrollViewer>().Where(scroll => scroll.Name == "FilteredSettings"));
